@@ -35,11 +35,11 @@ URL   = "http://kube.ai2.upv.es:31787"
 MODEL = "llama3.3:70b"
 
 # Groq cloud API (used when from_home = True - no VPN required)
-GROQ_API_KEY   = "..."
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 GROQ_MODEL_70B = "llama-3.3-70b-versatile"
 
-# Toggle: True = Groq cloud inference, False = local Ollama at UPV
-from_home: bool = False
+# Toggle: False = Groq cloud inference, True = local Ollama at UPV
+from_lab: bool = True
 
 
 # ==============================================================================
