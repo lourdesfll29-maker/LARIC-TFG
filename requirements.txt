@@ -1,0 +1,15 @@
+# --- Dependencias de Inteligencia Artificial y Agentes ---
+langchain>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+langchain-groq
+langchain-ollama
+langgraph
+langfuse<3.0.0
+
+# --- Procesamiento de Audio y Gráficos ---
+numpy<2.0
+SpeechRecognition
+sounddevice
+scipy
+PyQt5
