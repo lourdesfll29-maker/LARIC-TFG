@@ -5,6 +5,7 @@ langchain-community>=0.3.0,<0.4.0
 langchain-aws
 langchain-groq
 langchain-ollama
+langchain-openai
 langgraph
 langfuse<3.0.0
 
