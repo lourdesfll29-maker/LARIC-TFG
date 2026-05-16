@@ -48,7 +48,7 @@ from config import (
     MODEL,
     SYSTEM_PROMPT,
     URL,
-    from_home,
+    from_lab,
 )
 
 
@@ -1404,14 +1404,14 @@ def main() -> None:
 
     # 4. Connect to the LLM backend
     _publish_feedback(ros_connector, "[SYSTEM]: Connecting to LLM...")
-    if from_home:
+    if from_lab:
+        llm = ChatOllama(temperature=0, model=MODEL, base_url=URL)
+    else:
         llm = ChatGroq(
             temperature=0, 
             model=GROQ_MODEL_70B, 
             api_key=GROQ_API_KEY
         )
-    else:
-        llm = ChatOllama(temperature=0, model=MODEL, base_url=URL)
 
     # 5. Build the LangChain agent and executor
     prompt = ChatPromptTemplate.from_messages([
