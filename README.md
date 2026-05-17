@@ -5,7 +5,7 @@
 
 **Author:** Lourdes Francés Llimerá · ai2, Universitat Politècnica de València  
 **Tutor:** Juan Francisco Blanes Noguera  
-**Degree:** Grado en Ingeniería Informática — TFG 2025-2026
+**Degree:** Grado en Informática Industrial y Robótica — TFG 2025-2026
 
 ---
 
