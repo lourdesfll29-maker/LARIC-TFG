@@ -190,4 +190,4 @@ Both bypass the AI agent entirely and halt the robot with minimum latency.
 
 - Map `tb3_house_map` by A. Koubaa — [ros_course_part2](https://github.com/aniskoubaa/ros_course_part2)
 - RAI Framework by [Robotec AI](https://github.com/RobotecAI/rai)
-- Navigation stack: [Nav2](https://nav2.ros.org)
+- Navigation stack: [Nav2](https://github.com/ros-navigation/navigation2)
