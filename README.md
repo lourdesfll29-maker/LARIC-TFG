@@ -1,4 +1,4 @@
-# VIRC — Voice Interactive Robot Control
+# LARIC — Language-based Agent for Robotic Interaction and Control
 
 > Control a TurtleBot3 using natural language (voice or text) in Spanish or English.  
 > Say *"ve al baño"* or *"move forward 1 metre and then turn right 90 degrees"* — no robotics knowledge needed.
@@ -9,9 +9,9 @@
 
 ---
 
-## What is VIRC?
+## What is LARIC?
 
-VIRC is an intelligent robot control system that bridges natural language and ROS 2 robotics. A user speaks or types a command, a large language model (Llama 3.3 70B) interprets the intent and selects the appropriate Nav2 action, and the robot executes it safely with continuous position awareness.
+LARIC is an intelligent robot control system that bridges natural language and ROS 2 robotics. A user speaks or types a command, a large language model (Llama 3.3 70B) interprets the intent and selects the appropriate Nav2 action, and the robot executes it safely with continuous position awareness.
 
 The system currently runs on a simulated TurtleBot3 (Gazebo + `turtlebot3_house`) but is architecturally designed to transfer to physical hardware without code changes.
 
@@ -20,16 +20,16 @@ The system currently runs on a simulated TurtleBot3 (Gazebo + `turtlebot3_house`
 ## Repository Structure
 
 ```
-TFG-VIRC/
+LARIC-TFG/
 ├── README.md
-├── requirements.txt                 # Python dependencies for virc_env
+├── requirements.txt                 # Python dependencies for laric_env
 ├── docs/                            # Project documentation
 │   ├── documentacion.pdf            # Full TFG report
 │   ├── glosario.pdf                 # Technical glossary
 │   ├── manual_comandos.pdf          # Voice/text command reference
 │   ├── manual_configuracion.pdf     # Full installation guide
 │   └── manual_programacion.pdf      # Code walkthrough
-└── virc_ws/
+└── laric_ws/
     ├── start_simulation.sh          # Launch Gazebo + Nav2 + HMI + Agent
     ├── stop_simulation.sh           # Clean shutdown of all processes
     ├── maps/
@@ -92,29 +92,29 @@ rai_interface.py  ──[/from_human]──▶  agent_logic.py
 
 ## Quick Start
 
-> **Full installation guide** (VMware, Ubuntu 22.04, ROS 2, RAI, virc_env): see [`docs/manual_configuracion.pdf`](docs/manual_configuracion.pdf)
+> **Full installation guide** (VMware, Ubuntu 22.04, ROS 2, RAI, laric_env): see [`docs/manual_configuracion.pdf`](docs/manual_configuracion.pdf)
 
 ### Prerequisites
 - Ubuntu 22.04 with ROS 2 Humble installed
 - TurtleBot3 packages: `sudo apt install ros-humble-turtlebot3* -y`
 - RAI framework installed from [https://github.com/lourdesfll29-maker/rai.git](https://github.com/lourdesfll29-maker/rai.git)
-- Python virtual environment `virc_ws/virc_env` with `--system-site-packages`
+- Python virtual environment `laric_ws/laric_env` with `--system-site-packages`
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/lourdesfll29-maker/TFG-VIRC.git
-cd TFG-VIRC/virc_ws
+git clone https://github.com/lourdesfll29-maker/LARIC-TFG.git
+cd LARIC-TFG/laric_ws
 ```
 
 ### 2. Set up the Python environment
 ```bash
-python3 -m venv --system-site-packages virc_env
-source virc_env/bin/activate
+python3 -m venv --system-site-packages laric_env
+source laric_env/bin/activate
 pip install -r ../requirements.txt
 ```
 
 ### 3. Configure the API key
-VIRC can run in two modes, toggled by `from_lab` in `config.py`:
+LARIC can run in two modes, toggled by `from_lab` in `config.py`:
 
 | Mode | `from_lab` | Requires |
 |---|---|---|
@@ -129,7 +129,7 @@ export GROQ_API_KEY="gsk_..."
 ### 4. Build the ROS 2 package
 ```bash
 source /opt/ros/humble/setup.bash
-source virc_env/bin/activate
+source laric_env/bin/activate
 colcon build --symlink-install --packages-select rai_voice_ctrl
 source install/setup.bash
 ```
@@ -144,7 +144,7 @@ This opens four processes in order: **Gazebo** (10 s) → **Nav2 + RViz** (5 s) 
 ### 6. Initialise robot localisation
 Before sending any movement command, use the **"2D Pose Estimate"** tool in RViz to click on the robot's approximate position on the map. The HMI will confirm with:
 ```
-[VIRC]: Robot localised via '2D Pose Estimate'. Ready for commands.
+[LARIC]: Robot localised via '2D Pose Estimate'. Ready for commands.
 ```
 
 ### 7. Stop the system
