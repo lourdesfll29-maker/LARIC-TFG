@@ -1,8 +1,8 @@
 """
-VIRC System - Human-Machine Interface (HMI)
-Copyright (c) 2026 VIRC. All rights reserved.
+LARIC System - Human-Machine Interface (HMI)
+Copyright (c) 2026 LARIC. All rights reserved.
 
-Implements the graphical user interface for the VIRC system, combining a
+Implements the graphical user interface for the LARIC system, combining a
 ROS 2 node and a PyQt5 widget into a single object. Provides two input
 modalities (Push-to-Talk voice and keyboard text), a real-time colour-coded
 feedback log, and a direct hardware-level emergency stop button.
@@ -123,7 +123,7 @@ def _suppress_stderr() -> Generator[None, None, None]:
 
 class InterfaceNode(Node, QWidget):
     """
-    Combined ROS 2 node and PyQt5 widget implementing the VIRC HMI.
+    Combined ROS 2 node and PyQt5 widget implementing the LARIC HMI.
 
     Handles Push-to-Talk voice capture, Google Speech-to-Text transcription,
     keyboard text input, and real-time display of robot feedback messages.
@@ -220,7 +220,7 @@ class InterfaceNode(Node, QWidget):
         - A single-line text input for manual command entry.
         - A prominent emergency stop button.
         """
-        self.setWindowTitle("VIRC - Voice & Text Interface")
+        self.setWindowTitle("LARIC - Voice & Text Interface")
         self.setGeometry(1200, 100, 450, 660)
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
         layout = QVBoxLayout()
@@ -298,7 +298,7 @@ class InterfaceNode(Node, QWidget):
         before the UI terminates.
         """
         self.add_log(
-            "[SYSTEM] Shutting down entire VIRC system...", "#FF4444"
+            "[SYSTEM] Shutting down entire LARIC system...", "#FF4444"
         )
         
         try:

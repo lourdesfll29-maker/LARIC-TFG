@@ -1,6 +1,6 @@
 """
-VIRC System - Global Configuration
-Copyright (c) 2026 VIRC. All rights reserved.
+LARIC System - Global Configuration
+Copyright (c) 2026 LARIC. All rights reserved.
 
 Centralises all runtime-configurable parameters: API credentials, LLM model
 identifiers, the semantic location map, and the agent's behavioural prompt.
@@ -14,7 +14,7 @@ import os
 # 1. Get the absolute path of the directory where this config.py file is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 2. Navigate up 3 directory levels to reach the workspace root (e.g., virc_ws)
+# 2. Navigate up 3 directory levels to reach the workspace root (e.g., laric_ws)
 #    - First "..": exits the current folder (where config.py lives)
 #    - Second "..": exits the ROS 2 package folder
 #    - Third "..": exits the 'src' directory
@@ -114,7 +114,7 @@ KNOWN_LOCATIONS: dict = {
 #   stop_robot          -> StopTool.name
 
 SYSTEM_PROMPT: str = '''
-You are VIRC, the AI Operating System of a TurtleBot3.
+You are LARIC, the AI Operating System of a TurtleBot3.
 Your task is to understand the user's intent and call exactly ONE appropriate 
 tool.
 

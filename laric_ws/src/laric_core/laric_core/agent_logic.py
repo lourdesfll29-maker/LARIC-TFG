@@ -1,6 +1,6 @@
 """
-VIRC System - Agent Logic & ROS 2 Control
-Copyright (c) 2026 VIRC. All rights reserved.
+LARIC System - Agent Logic & ROS 2 Control
+Copyright (c) 2026 LARIC. All rights reserved.
 
 Main module implementing ROS 2 robot control via a LangChain tool-calling agent.
 All motion is delegated to Nav2 Behavior Plugins (/spin, /drive_on_heading, /backup)
@@ -318,7 +318,7 @@ class SpinTool(BaseTool):
         if not self.shared_state.get("is_localised", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -328,7 +328,7 @@ class SpinTool(BaseTool):
         if self.shared_state.get("is_busy", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Another action is currently in progress. "
+                "[LARIC]: Error - Another action is currently in progress. "
                 "Please wait for it to complete or use the 'Stop' tool to "
                 "abort it before issuing a new command."
             )
@@ -340,7 +340,7 @@ class SpinTool(BaseTool):
         # 1. Announce the action and reset shared state flags
         _publish_feedback(
             self.connector, 
-            f"[VIRC]: Starting rotation of {angle}°..."
+            f"[LARIC]: Starting rotation of {angle}°..."
         )
         self.shared_state["abort_flag"] = False
         self.shared_state["is_busy"] = True
@@ -406,7 +406,7 @@ class SpinTool(BaseTool):
                     self.shared_state["is_busy"] = False
                     _publish_feedback(
                         self.connector, 
-                        "[VIRC]: Rotation cancelled."
+                        "[LARIC]: Rotation cancelled."
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
@@ -422,7 +422,7 @@ class SpinTool(BaseTool):
             if action_done.is_set():
                 _publish_feedback(
                     self.connector, 
-                    "[VIRC]: Rotation completed successfully."
+                    "[LARIC]: Rotation completed successfully."
                 )
                 return result_container["text"]
             else:
@@ -430,7 +430,7 @@ class SpinTool(BaseTool):
                 self.connector.terminate_action(handle)
                 _publish_feedback(
                     self.connector, 
-                    "[VIRC]: Error - Spin timed out."
+                    "[LARIC]: Error - Spin timed out."
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for spin. "
@@ -441,7 +441,7 @@ class SpinTool(BaseTool):
             self.shared_state["is_busy"] = False
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -524,7 +524,7 @@ class MoveTool(BaseTool):
         if not self.shared_state.get("is_localised", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -534,7 +534,7 @@ class MoveTool(BaseTool):
         if self.shared_state.get("is_busy", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Another action is currently in progress. "
+                "[LARIC]: Error - Another action is currently in progress. "
                 "Please wait for it to complete or use the 'Stop' tool to "
                 "abort it before issuing a new command."
             )
@@ -554,7 +554,7 @@ class MoveTool(BaseTool):
         # 2. Announce action and reset shared state flags
         _publish_feedback(
             self.connector,
-            f"[VIRC]: Moving {dist_abs:.2f} m {direction_label} "
+            f"[LARIC]: Moving {dist_abs:.2f} m {direction_label} "
             f"at {speed:.2f} m/s..."
         )
         self.shared_state["abort_flag"] = False
@@ -619,7 +619,7 @@ class MoveTool(BaseTool):
                     self.shared_state["is_busy"] = False
                     _publish_feedback(
                         self.connector, 
-                        "[VIRC]: Movement cancelled."
+                        "[LARIC]: Movement cancelled."
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
@@ -635,14 +635,14 @@ class MoveTool(BaseTool):
             if action_done.is_set():
                 _publish_feedback(
                     self.connector, 
-                    "[VIRC]: Movement completed successfully."
+                    "[LARIC]: Movement completed successfully."
                 )
                 return result_container["text"]
             else:
                 self.connector.terminate_action(handle)
                 _publish_feedback(
                     self.connector, 
-                    "[VIRC]: Error - Movement timed out."
+                    "[LARIC]: Error - Movement timed out."
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for movement. "
@@ -653,7 +653,7 @@ class MoveTool(BaseTool):
             self.shared_state["is_busy"] = False
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -744,7 +744,7 @@ class SequenceTool(BaseTool):
         if not self.shared_state.get("is_localised", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -761,7 +761,7 @@ class SequenceTool(BaseTool):
 
         _publish_feedback(
             self.connector,
-            f"[VIRC]: Starting sequence of {len(parsed_steps)} steps..."
+            f"[LARIC]: Starting sequence of {len(parsed_steps)} steps..."
         )
 
         # 2. Execute each step in order
@@ -771,7 +771,7 @@ class SequenceTool(BaseTool):
             if self.shared_state.get("abort_flag", False):
                 _publish_feedback(
                     self.connector, 
-                    "[VIRC]: Sequence aborted between steps."
+                    "[LARIC]: Sequence aborted between steps."
                 )
                 return (
                         "ACTION ABORTED. Sequence halted by user. "
@@ -781,7 +781,7 @@ class SequenceTool(BaseTool):
             unit = "meters" if step.action.lower() == "move" else "degrees"
             _publish_feedback(
                 self.connector,
-                f"[VIRC]: Step {index + 1}/{len(parsed_steps)}: "
+                f"[LARIC]: Step {index + 1}/{len(parsed_steps)}: "
                 f"{step.action} -> {step.value} {unit}."
             )
 
@@ -795,7 +795,7 @@ class SequenceTool(BaseTool):
             else:
                 _publish_feedback(
                     self.connector,
-                    f"[VIRC]: Error - Unknown action type '{step.action}' "
+                    f"[LARIC]: Error - Unknown action type '{step.action}' "
                     f"at step {index + 1}. Valid types are 'move' and 'spin'. "
                 )
                 return (
@@ -808,7 +808,7 @@ class SequenceTool(BaseTool):
             if "ERROR" in result or "ABORTED" in result:
                 _publish_feedback(
                     self.connector,
-                    f"[VIRC]: Sequence interrupted at step {index + 1}. "
+                    f"[LARIC]: Sequence interrupted at step {index + 1}. "
                 )
                 return (
                     f"Sequence halted at step {index + 1}: {result}. "
@@ -820,7 +820,7 @@ class SequenceTool(BaseTool):
 
         _publish_feedback(
             self.connector, 
-            "[VIRC]: Sequence completed successfully."
+            "[LARIC]: Sequence completed successfully."
         )
         return (
             "SUCCESS. All sequence steps executed successfully. "
@@ -912,7 +912,7 @@ class NavigationTool(BaseTool):
         if not self.shared_state.get("is_localised", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -922,7 +922,7 @@ class NavigationTool(BaseTool):
         if self.shared_state.get("is_busy", False):
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Another action is currently in progress. "
+                "[LARIC]: Error - Another action is currently in progress. "
                 "Please wait for it to complete or use the 'Stop' tool to "
                 "abort it before issuing a new command."
             )
@@ -942,7 +942,7 @@ class NavigationTool(BaseTool):
             if loc not in KNOWN_LOCATIONS:
                 _publish_feedback(
                     self.connector,
-                    f"[VIRC] - Error: The Location '{loc}' was not found in " 
+                    f"[LARIC] - Error: The Location '{loc}' was not found in " 
                     "the semantic map of known locations. You can ask for the " 
                     "known locations."
                 )
@@ -959,7 +959,7 @@ class NavigationTool(BaseTool):
         else:
             _publish_feedback(
                 self.connector,
-                "[VIRC] - Error: No valid destination provided. You can ask for "
+                "[LARIC] - Error: No valid destination provided. You can ask for "
                 "the known locations."
             )
             return (
@@ -970,7 +970,7 @@ class NavigationTool(BaseTool):
         # 2. Announce intent and reset shared state
         _publish_feedback(
             self.connector, 
-            f"[VIRC]: Navigating to {dest_label}..."
+            f"[LARIC]: Navigating to {dest_label}..."
         )
         self.shared_state["abort_flag"] = False
         self.shared_state["is_busy"] = True
@@ -993,7 +993,7 @@ class NavigationTool(BaseTool):
             self.shared_state["is_busy"] = False
             _publish_feedback(
                 self.connector, 
-                "[VIRC]: Error - Ensure the robot is localised: use '2D Pose "
+                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
                 "Estimate' in RViz, then retry."
             )
             return (
@@ -1016,7 +1016,7 @@ class NavigationTool(BaseTool):
                 self.shared_state["is_busy"] = False
                 _publish_feedback(
                     self.connector, 
-                    f"[VIRC]: Navigation to {dest_label} cancelled."
+                    f"[LARIC]: Navigation to {dest_label} cancelled."
                 )
                 return (
                     "ACTION ABORTED. User stopped the navigation. "
@@ -1035,7 +1035,7 @@ class NavigationTool(BaseTool):
                     self.shared_state["is_busy"] = False
                     _publish_feedback(
                         self.connector, 
-                        f"[VIRC]: Arrived at {dest_label}.")
+                        f"[LARIC]: Arrived at {dest_label}.")
                     return (
                         f"SUCCESS. Arrived at {dest_label}. "
                         "DO NOT CALL ANY OTHER TOOLS." 
@@ -1048,7 +1048,7 @@ class NavigationTool(BaseTool):
                     self.shared_state["is_busy"] = False
                     _publish_feedback(
                         self.connector,
-                        f"[VIRC]: Error - Could not reach {dest_label}. "
+                        f"[LARIC]: Error - Could not reach {dest_label}. "
                         "Nav2 aborted."
                     )
                     return (
@@ -1068,7 +1068,7 @@ class NavigationTool(BaseTool):
         self.shared_state["is_busy"] = False
         _publish_feedback(
             self.connector,
-            f"[VIRC]: Error - Navigation to {dest_label} timed out (5 min)."
+            f"[LARIC]: Error - Navigation to {dest_label} timed out (5 min)."
         )
         return (
             "ERROR: Navigation timeout (5 minutes). "
@@ -1136,7 +1136,7 @@ class GestureTool(BaseTool):
         # 1. Announce the gesture with the rejection reason
         _publish_feedback(
             self.connector, 
-            "[VIRC]: (Negation gesture) Request not executable. "
+            "[LARIC]: (Negation gesture) Request not executable. "
             f"Reason: {reason}"
         )
 
@@ -1174,7 +1174,7 @@ class GestureTool(BaseTool):
             self.shared_state["is_busy"] = False
 
             if self.shared_state.get("abort_flag", False):
-                _publish_feedback(self.connector, "[VIRC]: Gesture interrupted.")
+                _publish_feedback(self.connector, "[LARIC]: Gesture interrupted.")
                 return (
                     "ACTION ABORTED.  "
                     "DO NOT CALL ANY OTHER TOOLS."
@@ -1189,7 +1189,7 @@ class GestureTool(BaseTool):
             self.shared_state["is_busy"] = False
             _publish_feedback(
                 self.connector, 
-                f"[VIRC]: Error - Couldn't execute the negation gesture."
+                f"[LARIC]: Error - Couldn't execute the negation gesture."
             )
             return (
                 f"ERROR executing gesture: {exc}. "
@@ -1285,7 +1285,7 @@ class StopTool(BaseTool):
 
         _publish_feedback(
             self.connector, 
-            "[VIRC]: Stop activated. All motion halted."
+            "[LARIC]: Stop activated. All motion halted."
         )
         return (
             "SUCCESS. Stop activated. All Nav2 goals cancelled. "
@@ -1359,7 +1359,7 @@ def _compute_move_allowance(distance_m: float, speed_m_s: float) -> float:
 @ROS2Context()
 def main() -> None:
     """
-    Main entry point for the VIRC robot agent system.
+    Main entry point for the LARIC robot agent system.
 
     Initialises the ROS 2 infrastructure, instantiates LangChain tools,
     connects to the LLM backend, and registers the human-input callback.
@@ -1374,7 +1374,7 @@ def main() -> None:
     # feedback message is sent.
     time.sleep(3.0)
 
-    _publish_feedback(ros_connector, "[SYSTEM]: Starting VIRC Agent...")
+    _publish_feedback(ros_connector, "[SYSTEM]: Starting LARIC Agent...")
 
     # 2. Create the shared state dictionary
     # This dict is accessed by multiple threads via the abort_flag and is_busy
@@ -1448,8 +1448,8 @@ def main() -> None:
         if not user_text:
             return
 
-        _publish_feedback(ros_connector, f"[VIRC]: Heard: '{user_text}'")
-        _publish_feedback(ros_connector, "[VIRC]: Thinking...")
+        _publish_feedback(ros_connector, f"[LARIC]: Heard: '{user_text}'")
+        _publish_feedback(ros_connector, "[LARIC]: Thinking...")
 
         def think() -> None:
             """
@@ -1472,10 +1472,10 @@ def main() -> None:
                     formatted_response = response.replace("\n", "<br>")
                     _publish_feedback(
                         ros_connector, 
-                        f"[VIRC]: {formatted_response}"
+                        f"[LARIC]: {formatted_response}"
                     )
             except Exception as exc:
-                _publish_feedback(ros_connector, f"[VIRC]: ERROR - {exc}")
+                _publish_feedback(ros_connector, f"[LARIC]: ERROR - {exc}")
 
         # Daemon threads are automatically joined when the main process exits.
         threading.Thread(target=think, daemon=True).start()
@@ -1504,7 +1504,7 @@ def main() -> None:
             robot_state["is_localised"] = True
             _publish_feedback(
                 ros_connector,
-                "[VIRC]: Robot localised via '2D Pose Estimate'. "
+                "[LARIC]: Robot localised via '2D Pose Estimate'. "
                 "Ready for commands."
             )
 
@@ -1523,11 +1523,11 @@ def main() -> None:
 
     _publish_feedback(
         ros_connector,
-        "[VIRC]: Agent ready. Listening on /from_human."
+        "[LARIC]: Agent ready. Listening on /from_human."
     )
     _publish_feedback(
         ros_connector,
-        "[VIRC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the "
+        "[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the "
         "robot before sending commands."
     )
 
@@ -1542,7 +1542,7 @@ def main() -> None:
         if msg.payload.data:
             _publish_feedback(
                 ros_connector, 
-                "[VIRC]: EMERGENCY STOP ACTIVATED."
+                "[LARIC]: EMERGENCY STOP ACTIVATED."
             )
             
             # Retrieve the StopTool instance from the tools list
@@ -1572,7 +1572,7 @@ def main() -> None:
     except KeyboardInterrupt:
         _publish_feedback(
             ros_connector, 
-            "[SYSTEM]: Shutting down VIRC Agent..."
+            "[SYSTEM]: Shutting down LARIC Agent..."
         )
 
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 
-# VIRC System - Shutdown Script
-# Copyright (c) 2026 VIRC. All rights reserved.
+# LARIC System - Shutdown Script
+# Copyright (c) 2026 LARIC. All rights reserved.
 #
 # Safely terminates all ROS 2 nodes, Python agents, and Gazebo processes.
 
-echo "Shutting down VIRC systems..."
+echo "Shutting down LARIC systems..."
 
 # Terminate ROS 2 launches and Python scripts
 # Using -f with specific patterns to avoid killing unrelated processes
 pkill -9 -f "agent_logic.py" || true
-pkill -9 -f "rai_interface.py" || true
+pkill -9 -f "laric_interface.py" || true
 
 pkill -9 -f "ros2 launch" || true
 

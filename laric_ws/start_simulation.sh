@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# VIRC System - Startup Script
-# Copyright (c) 2026 VIRC. All rights reserved.
+# LARIC System - Startup Script
+# Copyright (c) 2026 LARIC. All rights reserved.
 #
 # Orchestrates the launch of Gazebo, Nav2, the RAI Agent, and the HMI.
 
@@ -10,13 +10,13 @@
 set -e
 
 # Configuration variables
-WS_PATH="$HOME/virc_ws"
-VENV_PATH="$WS_PATH/virc_env/bin/activate"
-LOG_DIR="$WS_PATH/virc_logs/$(date +'%Y%m%d_%H%M%S')"
+WS_PATH="$HOME/laric_ws"
+VENV_PATH="$WS_PATH/laric_env/bin/activate"
+LOG_DIR="$WS_PATH/laric_logs/$(date +'%Y%m%d_%H%M%S')"
 
 mkdir -p "$LOG_DIR"
 
-echo "--- Starting VIRC Simulation Environment ---"
+echo "--- Starting LARIC Simulation Environment ---"
 
 # 1. Launch Gazebo (Physical World)
 echo "[1/4] Starting Gazebo (World)..."
@@ -38,15 +38,15 @@ sleep 5
 # 3. Launch HMI (The Voice/Text Interface)
 echo "[3/4] Starting Human-Machine Interface..."
 bash -c "source $VENV_PATH && python3 \
-    $WS_PATH/src/rai_voice_ctrl/rai_voice_ctrl/rai_interface.py > \
+    $WS_PATH/src/laric_core/laric_core/laric_interface.py > \
     $LOG_DIR/hmi.log 2>&1" &
 
 sleep 3
 
 # 4. Launch RAI Agent (The Brain)
 echo "[4/4] Starting RAI Agent Logic..."
-gnome-terminal --title="VIRC_Agent_Log" -- bash -c "source $VENV_PATH && \
-    python3 $WS_PATH/src/rai_voice_ctrl/rai_voice_ctrl/agent_logic.py; exec \
+gnome-terminal --title="LARIC_Agent_Log" -- bash -c "source $VENV_PATH && \
+    python3 $WS_PATH/src/laric_core/laric_core/agent_logic.py; exec \
     bash"
 
 echo "--- All systems are online ---"
