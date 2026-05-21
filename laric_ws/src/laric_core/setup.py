@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'rai_voice_ctrl'
+package_name = 'laric_core'
 
 setup(
     name=package_name,
