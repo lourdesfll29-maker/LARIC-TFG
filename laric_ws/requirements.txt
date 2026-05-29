@@ -1,5 +1,10 @@
-# --- Dependencias de Inteligencia Artificial y Agentes ---
-langchain>=0.3.0,<0.4.0
+# LARIC System - Project Dependencies
+# Copyright (c) 2026 LARIC. All rights reserved.
+#
+# Specifies the Python package dependencies required to run the LARIC 
+# Agent framework, ROS 2 integrations, and the Human-Machine Interface.
+
+# Artificial Intelligence & Agent Frameworklangchain>=0.3.0,<0.4.0
 langchain-core>=0.3.0,<0.4.0
 langchain-community>=0.3.0,<0.4.0
 langchain-aws
@@ -9,7 +14,7 @@ langchain-openai
 langgraph
 langfuse<3.0.0
 
-# --- Procesamiento de Audio y Gráficos ---
+# Audio Processing & Graphical User Interface
 numpy<2.0
 SpeechRecognition
 sounddevice

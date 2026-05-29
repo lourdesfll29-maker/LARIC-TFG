@@ -2,99 +2,116 @@
 LARIC System - Global Configuration
 Copyright (c) 2026 LARIC. All rights reserved.
 
-Centralises all runtime-configurable parameters: API credentials, LLM model
-identifiers, the semantic location map, and the agent's behavioural prompt.
+Centralises all runtime-configurable parameters:
+    - Project paths        (BASE_DIR, PROJECT_ROOT, SHUTDOWN_SCRIPT_PATH)
+    - LLM endpoints        (URL, MODEL, GROQ_API_KEY, GROQ_MODEL_70B, from_lab)
+    - Semantic map         (KNOWN_LOCATIONS)
+    - Agent system prompt  (SYSTEM_PROMPT, including the LANGUAGE RULE that
+                            tells the LLM to mirror the user's language)
 
-All other modules import from this file; no configuration values should be
-hard-coded elsewhere.
+This module is intentionally function-free: it should only declare values.
+Translation handling lives in 'i18n.py'; consumers import data from
+'config' and the '_' translator from 'i18n'.
 """
 
 import os
 
+
+# Toggle: False = Groq cloud inference, True = local Ollama at UPV
+is_from_lab: bool = True
+
+# ==============================================================================
+# ENVIRONMENT SELECTION
+# ==============================================================================
+# True when the agent talks to the real Husarion ROSbot at the UPV lab.
+# False when running against the Gazebo simulation.
+# Distinct from 'from_lab' (which is about LLM endpoint, not robot environment).
+is_real_robot: bool = True
+
+
+# ==============================================================================
+# PATH RESOLUTION
+# ==============================================================================
+
 # 1. Get the absolute path of the directory where this config.py file is located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
 # 2. Navigate up 3 directory levels to reach the workspace root (e.g., laric_ws)
 #    - First "..": exits the current folder (where config.py lives)
 #    - Second "..": exits the ROS 2 package folder
 #    - Third "..": exits the 'src' directory
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", "..", ".."))
+PROJECT_ROOT: str = os.path.abspath(os.path.join(BASE_DIR, "..", "..", ".."))
 
 # 3. Define the dynamic, system-agnostic path to the shutdown script
-SHUTDOWN_SCRIPT_PATH = os.path.join(PROJECT_ROOT, "stop_simulation.sh")
+SHUTDOWN_SCRIPT_PATH: str = os.path.join(
+    PROJECT_ROOT, "scripts",
+    "stop_real.sh" if is_real_robot else "stop_simulation.sh"
+)
+
 
 # ==============================================================================
 # API & MODEL CONFIGURATION
 # ==============================================================================
 
-# TODO: For production use, move credentials to environment variables and read
-# them with os.getenv(). They are kept inline here for development convenience.
+# Ollama server hosted at the ai2 UPV laboratory (used when from_lab = True)
+URL:   str = "http://kube.ai2.upv.es:31787"
+MODEL: str = "llama3.3:70b"
 
-# Ollama server hosted at the ai2 UPV laboratory (used when from_home = False)
-URL   = "http://kube.ai2.upv.es:31787"
-MODEL = "llama3.3:70b"
-
-# Groq cloud API (used when from_home = True - no VPN required)
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
-GROQ_MODEL_70B = "llama-3.3-70b-versatile"
-
-# Toggle: False = Groq cloud inference, True = local Ollama at UPV
-from_lab: bool = True
+# Groq cloud API (used when from_lab = False - no VPN required)
+GROQ_API_KEY:   str = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL_70B: str = "llama-3.3-70b-versatile"
 
 
 # ==============================================================================
 # SEMANTIC MAP (KNOWLEDGE BASE)
 # ==============================================================================
-# Maps human-readable location names to real-world ROS 2 / Nav2 map coordinates.
-# Coordinates were obtained by manually navigating to each point in Gazebo and
-# recording the odometry values reported by /odom.
+# Maps human-readable location names to map-frame coordinates.
+#
+# Two coordinate sets are maintained so that simulation and real-robot
+# operation can coexist without manual coordinate editing between sessions.
+# The active set is selected by 'is_real_robot' above.
 #
 # Structure: { "location_id": {"x": float, "y": float, "yaw": float} }
-# - x, y : position in the Nav2 map frame (meters)
-# - yaw   : desired final heading (radians); 0.0 = facing the +X axis
+#   - x, y : position in the Nav2 map frame (meters)
+#   - yaw  : desired final heading (radians); 0.0 = facing the +X axis
 
-KNOWN_LOCATIONS: dict = {
-    "top_right_room": {
-        "x":   5.99,
-        "y":  -1.07,
-        "yaw": 0.0,
-    },
-    "top_left_room": {
-        "x":   2.78,
-        "y":   1.55,
-        "yaw": 0.0,
-    },
-    "bathroom": {
-        "x":   1.29,
-        "y":   4.45,
-        "yaw": 0.0,
-    },
-    "entrance": {
-        "x":   0.94,
-        "y":   0.41,
-        "yaw": 0.0,
-    },
-    "outside": {
-        "x":   1.03,
-        "y":  -1.29,
-        "yaw": 0.0,
-    },
-    "dining_room": {
-        "x":  -0.69,
-        "y":   1.43,
-        "yaw": 0.0,
-    },
-    "bottom_left_room": {
-        "x":  -5.67,
-        "y":   3.67,
-        "yaw": 0.0,
-    },
-    "bottom_right_room": {
-        "x":  -6.34,
-        "y":   0.18,
-        "yaw": 0.0,
-    },
+# --- Simulation: Gazebo turtlebot3_house world ---
+KNOWN_LOCATIONS_SIM: dict = {
+    "top_right_room":    {"x":  5.99, "y": -1.07, "yaw": 0.0},
+    "top_left_room":     {"x":  2.78, "y":  1.55, "yaw": 0.0},
+    "bathroom":          {"x":  1.29, "y":  4.45, "yaw": 0.0},
+    "entrance":          {"x":  0.94, "y":  0.41, "yaw": 0.0},
+    "outside":           {"x":  1.03, "y": -1.29, "yaw": 0.0},
+    "dining_room":       {"x": -0.69, "y":  1.43, "yaw": 0.0},
+    "bottom_left_room":  {"x": -5.67, "y":  3.67, "yaw": 0.0},
+    "bottom_right_room": {"x": -6.34, "y":  0.18, "yaw": 0.0},
 }
+
+# --- Real robot: UPV ai2 lab (recorded 2026-05-29) ---
+KNOWN_LOCATIONS_REAL: dict = {
+    "sink_corner":       {"x": -5.78, "y": -3.29, "yaw": 0.0},
+    "cable_room":        {"x": -4.31, "y": -1.96, "yaw": 0.0},
+    "lab_entrance":      {"x": -3.02, "y": -6.14, "yaw": 0.0},
+    "marcos_desk":       {"x": -2.92, "y": -0.08, "yaw": 0.0},
+    "rosa_maria_desk":   {"x": -1.10, "y":  2.73, "yaw": 0.0},
+    "marc_desk":         {"x":  3.79, "y": -0.22, "yaw": 0.0},
+    "lourdes_desk":      {"x":  2.64, "y": -1.99, "yaw": 0.0},
+    "printer_room_door": {"x":  2.48, "y": -5.82, "yaw": 0.0},
+    "andrea_desk":       {"x":  6.72, "y": -2.83, "yaw": 0.0},
+    "storage_zone":      {"x":  5.58, "y": -7.93, "yaw": 0.0},
+    "aisle_1":           {"x": -0.30, "y": -0.05, "yaw": 0.0},
+    "aisle_2":           {"x":  3.20, "y": -1.95, "yaw": 0.0},
+    "aisle_3":           {"x":  6.08, "y": -4.57, "yaw": 0.0},
+    "lab_center":        {"x": -1.01, "y": -3.41, "yaw": 0.0},
+    "window_1":          {"x":  2.23, "y":  2.99, "yaw": 0.0},
+    "window_2":          {"x":  5.22, "y":  0.91, "yaw": 0.0},
+    "window_3":          {"x":  8.12, "y": -1.90, "yaw": 0.0},
+}
+
+# Active map: picked based on environment flag above.
+KNOWN_LOCATIONS: dict = (
+    KNOWN_LOCATIONS_REAL if is_real_robot else KNOWN_LOCATIONS_SIM
+)
 
 
 # ==============================================================================
@@ -115,12 +132,22 @@ KNOWN_LOCATIONS: dict = {
 
 SYSTEM_PROMPT: str = '''
 You are LARIC, the AI Operating System of a TurtleBot3.
-Your task is to understand the user's intent and call exactly ONE appropriate 
+Your task is to understand the user's intent and call exactly ONE appropriate
 tool.
 
 The robot operates exclusively through Nav2. It always knows its position on the
 map. You must never attempt to move the robot without Nav2 (no raw velocity
 commands, no guessing positions).
+
+----------------------------------------------------------------------------
+LANGUAGE RULE (APPLIES TO EVERY RESPONSE)
+----------------------------------------------------------------------------
+ALWAYS reply in the SAME language as the user's most recent message.
+   - If the user writes in Spanish, your text reply MUST be in Spanish.
+   - If the user writes in English, your text reply MUST be in English.
+   - This rule applies to conversational replies (rule 7 below). Tool calls
+     themselves carry no natural-language text, so language does not affect
+     tool selection - only the visible reply to the user.
 
 ----------------------------------------------------------------------------
 TOOL SELECTION RULES
@@ -169,8 +196,7 @@ TOOL SELECTION RULES
 5. AUTONOMOUS NAVIGATION → Call `navigate_to_location`
    Intent : travelling to a known semantic destination (a room, a waypoint).
    Schema : location_name (must match an entry in the known locations map).
-   Known locations: top_right_room, top_left_room, bathroom, entrance,
-                    outside, dining_room, bottom_left_room, bottom_right_room.
+   Known locations: __LOCATIONS_LIST__.
 
 6. IMPOSSIBLE / UNKNOWN → Call `negation_gesture`
    Intent : requests that exceed the physical capabilities of a wheeled
@@ -178,14 +204,15 @@ TOOL SELECTION RULES
    Examples: "fly to the ceiling", "make me a coffee", "asdflkj".
 
 7. CONVERSATION & IDENTITY -> DO NOT call any tool.
-   Intent : The user says hello, asks who you are, asks what you can do, or 
+   Intent : The user says hello, asks who you are, asks what you can do, or
             makes general conversation.
-   Action : Simply reply directly with a friendly text response explaining your 
-            capabilities. Do not explain your reasoning.
-            CRITICAL FORMATTING: You are outputting to a plain-text terminal. 
-            You MUST use actual line breaks (newlines) to separate items. 
-            Do NOT use Markdown asterisks (*) for bolding or bullets. 
-            Use standard hyphens (-) for lists, and ensure every list item 
+   Action : Simply reply directly with a friendly text response explaining your
+            capabilities, in the SAME LANGUAGE as the user (see LANGUAGE RULE
+            above). Do not explain your reasoning.
+            CRITICAL FORMATTING: You are outputting to a plain-text terminal.
+            You MUST use actual line breaks (newlines) to separate items.
+            Do NOT use Markdown asterisks (*) for bolding or bullets.
+            Use standard hyphens (-) for lists, and ensure every list item
             starts on a brand new line.
 
 ----------------------------------------------------------------------------
@@ -202,16 +229,17 @@ RULE 2 - ASYNCHRONY: The motion tools (`spin_robot`, `move_robot`,
   motion you just started.
 
 RULE 3 - NO SELF-CANCELLATION: Never call `stop_robot` immediately after any
-  motion tool call in the same turn. 
+  motion tool call in the same turn.
 
 RULE 4 - EVALUATE OBSERVATION: After calling a tool and receiving its result:
-  - If the result starts with SUCCESS: STOP YOUR TURN. DO NOT explain the 
+  - If the result starts with SUCCESS: STOP YOUR TURN. DO NOT explain the
     result.
   - If the result starts with ERROR, ACTION FAILED, or ACTION ABORTED:
-    STOP YOUR TURN. Do NOT pretend the action succeeded. You are STRICTLY 
-    FORBIDDEN from calling `negation_gesture` or any other tool. DO NOT explain 
+    STOP YOUR TURN. Do NOT pretend the action succeeded. You are STRICTLY
+    FORBIDDEN from calling `negation_gesture` or any other tool. DO NOT explain
     the result.
 
 RULE 5 - EXPLICIT STOPS ONLY: Only call `stop_robot` when the user
   explicitly commands a halt (e.g., "stop", "para", "detente", "quieto").
-'''
+'''.replace("__LOCATIONS_LIST__", ", ".join(KNOWN_LOCATIONS.keys()))
+

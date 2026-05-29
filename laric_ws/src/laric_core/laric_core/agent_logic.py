@@ -3,22 +3,44 @@ LARIC System - Agent Logic & ROS 2 Control
 Copyright (c) 2026 LARIC. All rights reserved.
 
 Main module implementing ROS 2 robot control via a LangChain tool-calling agent.
-All motion is delegated to Nav2 Behavior Plugins (/spin, /drive_on_heading, /backup)
-or the Nav2 NavigateToPose action server. The robot must always be localised via
-the '2D Pose Estimate' tool in RViz before any motion command is accepted.
+All motion is delegated to Nav2 Behavior Plugins (/spin, /drive_on_heading,
+/backup) or the Nav2 NavigateToPose action server. The robot must always be
+localised via the '2D Pose Estimate' tool in RViz before any motion command is
+accepted.
+
+ROS 2 topics consumed:
+  /from_human         (std_msgs/String)  - user commands routed to the LLM.
+  /initialpose        (geometry_msgs/PoseWithCovarianceStamped) - localisation.
+  /emergency_stop     (std_msgs/Bool)    - hardware E-Stop from the HMI.
+  /language_changed   (std_msgs/String)  - new language code from the HMI,
+                                           propagated to the i18n catalog so
+                                           operator-facing feedback matches
+                                           the language the user selected.
+
+ROS 2 topics produced:
+  /robot_feedback     (std_msgs/String)  - status messages shown in the HMI
+                                           log; every message is wrapped with
+                                           i18n._() so the language follows
+                                           the active catalog.
+
+Internationalisation:
+  All operator-facing strings flow through 'i18n._()'. The translator is
+  resolved at call time, so a runtime 'set_language(...)' (driven by the
+  /language_changed subscription below) takes effect immediately for every
+  subsequent _publish_feedback. Internal LLM-facing return strings
+  (SUCCESS / ACTION FAILED / ACTION ABORTED / ERROR) are intentionally NOT
+  translated: SYSTEM_PROMPT's rule 4 matches on those English prefixes.
 """
 
 import math
 import threading
 import time
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, List, Optional, Type, Union
 
 from pydantic import BaseModel, Field
-from builtin_interfaces.msg import Duration
 
 # -- ROS 2 -----------------------------------------------------------------------
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import Point
 
 # -- Nav2 action definitions -----------------------------------------------------
 from nav2_msgs.action import BackUp, DriveOnHeading, Spin
@@ -40,7 +62,7 @@ from rai.tools.ros2.navigation.nav2 import (
     NavigateToPoseTool
 )
 
-# -- Project configuration -------------------------------------------------------
+# -- Project configuration & i18n ------------------------------------------------
 from config import (
     GROQ_API_KEY,
     GROQ_MODEL_70B,
@@ -48,8 +70,9 @@ from config import (
     MODEL,
     SYSTEM_PROMPT,
     URL,
-    from_lab,
+    is_from_lab,
 )
+from i18n import _, set_language
 
 
 # ==============================================================================
@@ -153,14 +176,13 @@ class SequenceInput(BaseModel):
     Input schema for SequenceTool (ordered series of primitive movements).
 
     Attributes:
-        steps: Ordered list of movement steps. Maximum 5 steps. Each step
-            executes only after the previous one has completed successfully.
+        steps: Ordered list of movement steps. Each step executes only after the
+            previous one has completed successfully.
     """
 
     steps: List[SequenceStep] = Field(
         description=(
             "Ordered list of movement steps to execute sequentially. "
-            "Maximum 5 steps. "
             "Use for commands that chain movements with connectors such as "
             "'and then', 'after that', 'then', 'y luego', 'y despues'."
         )
@@ -261,8 +283,12 @@ class SpinTool(BaseTool):
             when to invoke this tool.
         args_schema: Pydantic model that validates and documents input.
         connector: Active 'ROS2Connector' instance for action I/O.
-        shared_state: Shared mutable dictionary containing 'abort_flag'
-            and 'is_busy' keys used for cross-tool coordination.
+        abort_event: Shared 'threading.Event'; set by 'StopTool' to cancel
+            an in-flight motion.
+        motion_lock: Shared 'threading.Lock'; acquired non-blockingly at
+            entry to guarantee at most one motion runs at a time.
+        localised_event: Shared 'threading.Event'; must be set (robot
+            localised via RViz '2D Pose Estimate') before any motion runs.
     """
 
     name: str = "spin_robot"
@@ -275,13 +301,17 @@ class SpinTool(BaseTool):
     args_schema: Type[BaseModel] = SpinInput
     return_direct: bool = True
 
-    connector: Any = None
-    shared_state: dict = None
+    connector:       Any = None
+    abort_event:     Any = None
+    motion_lock:     Any = None
+    localised_event: Any = None
 
     def __init__(
         self, 
         connector: ROS2Connector, 
-        shared_state: dict, 
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        localised_event: threading.Event,
         **kwargs
     ) -> None:
         """
@@ -290,13 +320,17 @@ class SpinTool(BaseTool):
         Args:
             connector: Active 'ROS2Connector' used to communicate with the
                 Nav2 '/spin' action server.
-            shared_state: Shared mutable dictionary with 'abort_flag' and
-                'is_busy' keys.
+            abort_event: Shared Event; set by StopTool to cancel motion.
+            motion_lock: Shared Lock; prevents concurrent motion commands.
+            localised_event: Shared Event; must be set (robot localised) before
+                any motion is permitted.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
-        self.connector = connector
-        self.shared_state = shared_state
+        self.connector       = connector
+        self.abort_event     = abort_event
+        self.motion_lock     = motion_lock
+        self.localised_event = localised_event
 
     def _run(self, angle: float) -> str:
         """
@@ -314,77 +348,85 @@ class SpinTool(BaseTool):
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
             or 'ERROR', which the LLM evaluates to formulate its response.
         """
-        # 0. Blabla
-        if not self.shared_state.get("is_localised", False):
+        # 0. Check preconditions
+        if not self.localised_event.is_set():
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
+                self.connector,
+                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                  "Estimate' in RViz, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
-        if self.shared_state.get("is_busy", False):
+        if not self.motion_lock.acquire(blocking=False):
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Another action is currently in progress. "
-                "Please wait for it to complete or use the 'Stop' tool to "
-                "abort it before issuing a new command."
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to abort it "
+                  "before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
 
-        # 1. Announce the action and reset shared state flags
-        _publish_feedback(
-            self.connector, 
-            f"[LARIC]: Starting rotation of {angle}°..."
-        )
-        self.shared_state["abort_flag"] = False
-        self.shared_state["is_busy"] = True
-
-        # 2. Build the Nav2 Spin goal
-        target_yaw_rad = math.radians(angle)
-        # time_allowance caps how long Nav2 may attempt the spin.
-        # Computed from the expected kinematic duration plus a safety buffer
-        # to avoid false timeouts on large rotations (e.g., 360°).
-        timeout_float = _compute_spin_allowance(target_yaw_rad)
-
-        goal_dict = {
-            "target_yaw": float(target_yaw_rad),
-            "time_allowance": {
-                "sec": int(timeout_float),
-                "nanosec": int((timeout_float - int(timeout_float)) * 1e9)
-            }
-        }
-
-        # 3. Set up threading synchronisation primitives
-        # threading.Event provides atomic set/wait semantics without an 
-        # explicit lock, making it preferable to a raw boolean flag for 
-        # cross-thread signalling.
-        action_done = threading.Event()
-        result_container: dict = {"text": ""}
-
-        def _on_done(result: Spin.Result) -> None:
-            """
-            Signals completion when the Nav2 action server responds.
-            """
-            result_container["text"] = (
-                f"SUCCESS. Rotation of {angle}° completed. "
-                "DO NOT CALL ANY OTHER TOOLS."
-            )
-            action_done.set()
-
-        def _on_feedback(feedback: Any) -> None:
-            """
-            Incremental feedback handler (unused; reserved for future logging).
-            """
-            pass
-
-        # 4. Send the goal to the Nav2 /spin action server
         try:
+            self.abort_event.clear()
+
+            # 1. Announce the action
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Starting rotation of {angle}°...").format(angle=angle)
+            )
+
+            # 2. Build the Nav2 Spin goal
+            target_yaw_rad = math.radians(angle)
+            # time_allowance caps how long Nav2 may attempt the spin.
+            # Computed from the expected kinematic duration plus a safety buffer
+            # to avoid false timeouts on large rotations (e.g., 360°).
+            timeout_float = _compute_spin_allowance(target_yaw_rad)
+
+            goal_dict = {
+                "target_yaw": float(target_yaw_rad),
+                "time_allowance": {
+                    "sec": int(timeout_float),
+                    "nanosec": int((timeout_float - int(timeout_float)) * 1e9)
+                }
+            }
+
+            # 3. Set up threading synchronisation primitives
+            # threading.Event provides atomic set/wait semantics without an 
+            # explicit lock, making it preferable to a raw boolean flag for 
+            # cross-thread signalling.
+            action_done      = threading.Event()
+            result_container = {"text": ""}
+
+            # TODO: Solve ACTION FAILED issue
+            def _on_done(result: Spin.Result) -> None:
+                """
+                Signals completion when the Nav2 action server responds.
+                """
+                status = result.result().status
+                if status == GoalStatus.STATUS_SUCCEEDED:   # 4
+                    result_container["text"] = (
+                        f"SUCCESS. Rotation of {angle}° completed. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+                else:
+                    result_container["text"] = (
+                        f"ACTION FAILED. Nav2 returned status {status}. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+                action_done.set()
+
+            def _on_feedback(feedback: Any) -> None:
+                """
+                Incremental feedback handler (unused; reserved for future logging).
+                """
+                pass
+
+            # 4. Send the goal to the Nav2 /spin action server
             handle = self.connector.start_action(
                 action_data=ROS2Message(payload=goal_dict),
                 target="/spin",
@@ -394,19 +436,17 @@ class SpinTool(BaseTool):
             )
 
             # 5. Poll for completion, abort signal, or timeout
-            timeout = timeout_float
-            elapsed = 0.0
+            timeout       = timeout_float
+            elapsed       = 0.0
             poll_interval = 0.2  # seconds; balances responsiveness vs CPU load
 
             while not action_done.is_set() and elapsed < timeout:
-                if self.shared_state.get("abort_flag", False):
-                    # StopTool has set the flag; 
-                    # cancel the Nav2 goal immediately.
+                if self.abort_event.is_set():
+                    # StopTool has set the flag; cancel the Nav2 goal immediately.
                     self.connector.terminate_action(handle)
-                    self.shared_state["is_busy"] = False
                     _publish_feedback(
-                        self.connector, 
-                        "[LARIC]: Rotation cancelled."
+                        self.connector,
+                        _("[LARIC]: Rotation cancelled.")
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
@@ -416,21 +456,27 @@ class SpinTool(BaseTool):
                 time.sleep(poll_interval)
                 elapsed += poll_interval
 
-            self.shared_state["is_busy"] = False
-
             # 6. Evaluate final outcome
             if action_done.is_set():
-                _publish_feedback(
-                    self.connector, 
-                    "[LARIC]: Rotation completed successfully."
-                )
+                if "SUCCESS" in result_container["text"]:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Rotation completed successfully.")
+                    )
+                else:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Rotation could not be completed."
+                        "Try issuing a navigate to location command first "
+                        "to warm up the system, then retry. ")
+                    )
                 return result_container["text"]
             else:
                 # Timeout: terminate the stale action before returning.
                 self.connector.terminate_action(handle)
                 _publish_feedback(
-                    self.connector, 
-                    "[LARIC]: Error - Spin timed out."
+                    self.connector,
+                    _("[LARIC]: Error - Spin timed out.")
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for spin. "
@@ -438,16 +484,20 @@ class SpinTool(BaseTool):
                 )
 
         except Exception as exc:
-            self.shared_state["is_busy"] = False
+            # No need to clear any busy flag here: the lock release is handled
+            # unconditionally by the 'finally' below.
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
+                self.connector,
+                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                  "Estimate' in RViz, then retry.")
             )
             return (
                 f"ERROR: Critical Nav2 exception in SpinTool: {exc}. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
+        
+        finally:
+            self.motion_lock.release()
 
 
 # ------------------------------------------------------------------------------
@@ -465,7 +515,12 @@ class MoveTool(BaseTool):
         description: Read by the LLM to decide when to invoke this tool.
         args_schema: Pydantic model validating and documenting input.
         connector: Active 'ROS2Connector' instance.
-        shared_state: Shared mutable dictionary ('abort_flag', 'is_busy').
+        abort_event: Shared 'threading.Event'; set by 'StopTool' to cancel
+            an in-flight motion.
+        motion_lock: Shared 'threading.Lock'; acquired non-blockingly at
+            entry to serialise motion commands.
+        localised_event: Shared 'threading.Event'; must be set before any
+            motion is attempted.
     """
 
     name: str = "move_robot"
@@ -480,23 +535,35 @@ class MoveTool(BaseTool):
     args_schema: Type[BaseModel] = MoveInput
     return_direct: bool = True
 
-    connector: Any = None
-    shared_state: dict = None
+    connector:       Any = None
+    abort_event:     Any = None
+    motion_lock:     Any = None
+    localised_event: Any = None
 
-    def __init__(self, connector: ROS2Connector, shared_state: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        localised_event: threading.Event,
+        **kwargs,
+    ) -> None:
         """
         Initialises MoveTool with the ROS 2 connector and shared state.
 
         Args:
             connector: Active 'ROS2Connector' used to communicate with
                 '/drive_on_heading' or '/backup' action servers.
-            shared_state: Shared mutable dictionary with 'abort_flag' and
-                'is_busy' keys.
+            abort_event: Shared Event for stop signalling.
+            motion_lock: Shared Lock; prevents concurrent motion.
+            localised_event: Shared Event; robot localisation prerequisite.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
-        self.connector = connector
-        self.shared_state = shared_state
+        self.connector       = connector
+        self.abort_event     = abort_event
+        self.motion_lock     = motion_lock
+        self.localised_event = localised_event
 
     def _run(self, distance: float, speed: float = 0.0) -> str:
         """
@@ -520,86 +587,99 @@ class MoveTool(BaseTool):
             No exceptions are raised; all errors are caught and returned as
             string messages so the LLM can report them to the user.
         """
-        # 0. Blabla
-        if not self.shared_state.get("is_localised", False):
+        # 0. Check preconditions
+        if not self.localised_event.is_set():
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
+                self.connector,
+                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                  "Estimate' in RViz, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
-        if self.shared_state.get("is_busy", False):
+        # acquire(blocking=False) returns True iff the lock was free and is now
+        # held by this thread. The 'not' below means: "if we failed to acquire,
+        # another motion is in progress -> reject". Forgetting the 'not' here
+        # would invert the meaning AND leak the lock on the happy path.
+        if not self.motion_lock.acquire(blocking=False):
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Another action is currently in progress. "
-                "Please wait for it to complete or use the 'Stop' tool to "
-                "abort it before issuing a new command."
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to abort it "
+                  "before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
 
-        # 1. Apply speed defaults and determine travel direction
-        is_forward = distance >= 0.0
-        dist_abs = abs(distance)
-        direction_label = "forward" if is_forward else "backward"
-
-        if speed <= 0.0:
-            speed = 0.3 if is_forward else 0.2
-
-        # 2. Announce action and reset shared state flags
-        _publish_feedback(
-            self.connector,
-            f"[LARIC]: Moving {dist_abs:.2f} m {direction_label} "
-            f"at {speed:.2f} m/s..."
-        )
-        self.shared_state["abort_flag"] = False
-        self.shared_state["is_busy"] = True
-
-        timeout_float = _compute_move_allowance(dist_abs, speed)
-        goal_dict = {
-            "target": {"x": float(dist_abs), "y": 0.0, "z": 0.0},
-            "speed": float(speed),
-            "time_allowance": {
-                "sec": int(timeout_float),
-                "nanosec": int((timeout_float - int(timeout_float)) * 1e9)
-            }
-        }
-
-        # 3. Build the appropriate Nav2 goal based on direction
-        if is_forward:
-            target_action = "/drive_on_heading"
-            action_type= "nav2_msgs/action/DriveOnHeading"
-        else:
-            target_action = "/backup"
-            action_type= "nav2_msgs/action/BackUp"
-
-        # 4. Set up threading synchronisation
-        action_done = threading.Event()
-        result_container: dict = {"text": ""}
-
-        def _on_done(result: Union[DriveOnHeading.Result, BackUp.Result]) -> None:
-            """
-            Signals completion when the Nav2 action server responds.
-            """
-            result_container["text"] = (
-                f"SUCCESS. Moved {dist_abs:.2f} m {direction_label}. "
-                "DO NOT CALL ANY OTHER TOOLS."
-            )
-            action_done.set()
-
-        def _on_feedback(feedback: Any) -> None:
-            """
-            Incremental feedback handler (reserved for future use).
-            """
-            pass
-
-        # 5. Send the goal to the selected Nav2 action server
         try:
+            # 1. Apply speed defaults and determine travel direction
+            is_forward = distance >= 0.0
+            dist_abs = abs(distance)
+            direction_label = _("forward") if is_forward else _("backward")
+
+            if speed <= 0.0:
+                speed = 0.3 if is_forward else 0.2
+
+            self.abort_event.clear()
+            # 2. Announce action
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Moving {dist:.2f} m {direction} at {speed:.2f} m/s...")
+                .format(dist=dist_abs, direction=direction_label, speed=speed)
+            )
+
+            timeout_float = _compute_move_allowance(dist_abs, speed)
+            goal_dict = {
+                "target": {"x": float(dist_abs), "y": 0.0, "z": 0.0},
+                "speed": float(speed),
+                "time_allowance": {
+                    "sec": int(timeout_float),
+                    "nanosec": int((timeout_float - int(timeout_float)) * 1e9)
+                }
+            }
+
+            # 3. Build the appropriate Nav2 goal based on direction
+            if is_forward:
+                target_action = "/drive_on_heading"
+                action_type   = "nav2_msgs/action/DriveOnHeading"
+            else:
+                target_action = "/backup"
+                action_type   = "nav2_msgs/action/BackUp"
+
+            # 4. Set up threading synchronisation
+            action_done      = threading.Event()
+            result_container = {"text": ""}
+
+            # TODO: Solve ACTION FAILED issue
+            def _on_done(
+                    result: Union[DriveOnHeading.Result, BackUp.Result]
+            ) -> None:
+                """
+                Signals completion when the Nav2 action server responds.
+                """
+                status = result.result().status
+                if status == GoalStatus.STATUS_SUCCEEDED:   # 4
+                    result_container["text"] = (
+                        f"SUCCESS. Moved {dist_abs:.2f} m {direction_label}. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+                else:
+                    result_container["text"] = (
+                        f"ACTION FAILED. Nav2 returned status {status}. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+                action_done.set()
+
+            def _on_feedback(feedback: Any) -> None:
+                """
+                Incremental feedback handler (reserved for future use).
+                """
+                pass
+
+            # 5. Send the goal to the selected Nav2 action server
             handle = self.connector.start_action(
                 action_data=ROS2Message(payload=goal_dict),
                 target=target_action,
@@ -609,40 +689,45 @@ class MoveTool(BaseTool):
             )
 
             # 6. Poll for completion, abort, or timeout
-            timeout = timeout_float
-            elapsed = 0.0
+            timeout       = timeout_float
+            elapsed       = 0.0
             poll_interval = 0.2
 
             while not action_done.is_set() and elapsed < timeout:
-                if self.shared_state.get("abort_flag", False):
+                if self.abort_event.is_set():
                     self.connector.terminate_action(handle)
-                    self.shared_state["is_busy"] = False
                     _publish_feedback(
-                        self.connector, 
-                        "[LARIC]: Movement cancelled."
+                        self.connector,
+                        _("[LARIC]: Movement cancelled.")
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
                         "DO NOT CALL ANY OTHER TOOLS."
-                    ) 
+                    )
 
                 time.sleep(poll_interval)
                 elapsed += poll_interval
 
-            self.shared_state["is_busy"] = False
-
             # 7. Evaluate outcome
             if action_done.is_set():
-                _publish_feedback(
-                    self.connector, 
-                    "[LARIC]: Movement completed successfully."
-                )
+                if "SUCCESS" in result_container["text"]:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Movement completed successfully.")
+                    )
+                else:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Movement could not be completed." 
+                        "Try issuing a navigate to location command first "
+                        "to warm up the system, then retry. ")
+                    )
                 return result_container["text"]
             else:
                 self.connector.terminate_action(handle)
                 _publish_feedback(
-                    self.connector, 
-                    "[LARIC]: Error - Movement timed out."
+                    self.connector,
+                    _("[LARIC]: Error - Movement timed out.")
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for movement. "
@@ -650,16 +735,18 @@ class MoveTool(BaseTool):
                 )
 
         except Exception as exc:
-            self.shared_state["is_busy"] = False
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
+                self.connector,
+                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                  "Estimate' in RViz, then retry.")
             )
             return (
-                "ERROR: Critical Nav2 exception in MoveTool: {exc} "
+                f"ERROR: Critical Nav2 exception in MoveTool: {exc}. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
+        
+        finally:
+            self.motion_lock.release()
 
 
 # ------------------------------------------------------------------------------
@@ -679,7 +766,13 @@ class SequenceTool(BaseTool):
         description: Read by the LLM to decide when to invoke this tool.
         args_schema: Pydantic model validating input.
         connector: Active 'ROS2Connector' instance.
-        shared_state: Shared mutable dictionary ('abort_flag', 'is_busy').
+        abort_event: Shared 'threading.Event'; propagated to the sub-tools so
+            'StopTool' can halt the active step mid-sequence.
+        motion_lock: Shared 'threading.Lock'; not acquired by this class -
+            the inner '_move_tool' / '_spin_tool' acquire it per step.
+        localised_event: Shared 'threading.Event'; checked by the sub-tools.
+        _spin_tool: Internal 'SpinTool' instance used for spin steps.
+        _move_tool: Internal 'MoveTool' instance used for move steps.
     """
 
     name: str = "execute_sequence"
@@ -689,40 +782,54 @@ class SequenceTool(BaseTool):
         "more movements with connectors: 'and then', 'after that', 'then', "
         "'y luego', 'y despues'. "
         "Each step executes only after the previous one completes. "
-        "Maximum 5 steps. "
         "Nav2 MUST be localised before calling."
     )
     args_schema: Type[BaseModel] = SequenceInput
     return_direct: bool = True
 
-    connector: Any = None
-    shared_state: dict = None
-    _spin_tool: Any = None
-    _move_tool: Any = None
+    connector:       Any = None
+    abort_event:     Any = None
+    motion_lock:     Any = None
+    localised_event: Any = None
+    _spin_tool:      Any = None
+    _move_tool:      Any = None
 
-    def __init__(self, connector: ROS2Connector, shared_state: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        localised_event: threading.Event,
+        **kwargs,
+    ) -> None:
         """
         Initialises SequenceTool and its internal primitive sub-tools.
 
         Args:
             connector: Active 'ROS2Connector'.
-            shared_state: Shared mutable dictionary. Passed to sub-tools so
-                that 'abort_flag' propagation works across step boundaries:
-                a 'StopTool' call interrupts the currently-running step.
+            abort_event: Threading event to signal abort requests.
+            motion_lock: Threading lock to synchronize motion commands.
+            localised_event: Threading event to signal localisation status.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
         self.connector = connector
-        self.shared_state = shared_state
+        self.abort_event = abort_event
+        self.motion_lock = motion_lock
+        self.localised_event = localised_event
         # Sub-tools share the same connector and state so abort_flag propagates
         # correctly - stopping mid-sequence halts the active step immediately.
         self._spin_tool = SpinTool(
             connector=connector, 
-            shared_state=shared_state
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event
         )
         self._move_tool = MoveTool(
             connector=connector, 
-            shared_state=shared_state
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event
         )
 
     def _run(self, steps: List[SequenceStep]) -> str:
@@ -740,18 +847,6 @@ class SequenceTool(BaseTool):
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
             or 'ERROR' (or an error message naming the failed step).
         """
-        # 0. Blabla
-        if not self.shared_state.get("is_localised", False):
-            _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
-            )
-            return (
-                "ACTION FAILED. The robot is not localised. "
-                "DO NOT CALL ANY OTHER TOOLS."
-            )
-
         # 1. Defensive parsing: LangChain serialises tool arguments as plain
         # dicts when the schema contains a List of nested models. Coerce them
         # back to SequenceStep instances before processing.
@@ -761,28 +856,32 @@ class SequenceTool(BaseTool):
 
         _publish_feedback(
             self.connector,
-            f"[LARIC]: Starting sequence of {len(parsed_steps)} steps..."
+            _("[LARIC]: Starting sequence of {n} steps...")
+            .format(n=len(parsed_steps))
         )
 
         # 2. Execute each step in order
         for index, step in enumerate(parsed_steps):
 
             # Check abort flag before starting the next step
-            if self.shared_state.get("abort_flag", False):
+            if self.abort_event.is_set():
                 _publish_feedback(
-                    self.connector, 
-                    "[LARIC]: Sequence aborted between steps."
+                    self.connector,
+                    _("[LARIC]: Sequence aborted between steps.")
                 )
                 return (
                         "ACTION ABORTED. Sequence halted by user. "
                         "DO NOT CALL ANY OTHER TOOLS."
                 )
 
-            unit = "meters" if step.action.lower() == "move" else "degrees"
+            unit = _("meters") if step.action.lower() == "move" else _("degrees")
             _publish_feedback(
                 self.connector,
-                f"[LARIC]: Step {index + 1}/{len(parsed_steps)}: "
-                f"{step.action} -> {step.value} {unit}."
+                _("[LARIC]: Step {i}/{n}: {action} -> {value} {unit}.")
+                .format(
+                    i=index + 1, n=len(parsed_steps),
+                    action=step.action, value=step.value, unit=unit,
+                )
             )
 
             # 3. Dispatch to the appropriate primitive tool
@@ -795,8 +894,9 @@ class SequenceTool(BaseTool):
             else:
                 _publish_feedback(
                     self.connector,
-                    f"[LARIC]: Error - Unknown action type '{step.action}' "
-                    f"at step {index + 1}. Valid types are 'move' and 'spin'. "
+                    _("[LARIC]: Error - Unknown action type '{action}' at step "
+                      "{i}. Valid types are 'move' and 'spin'.")
+                    .format(action=step.action, i=index + 1)
                 )
                 return (
                     f"ERROR: Unknown action type '{step.action}' "
@@ -808,7 +908,8 @@ class SequenceTool(BaseTool):
             if "ERROR" in result or "ABORTED" in result:
                 _publish_feedback(
                     self.connector,
-                    f"[LARIC]: Sequence interrupted at step {index + 1}. "
+                    _("[LARIC]: Sequence interrupted at step {i}.")
+                    .format(i=index + 1)
                 )
                 return (
                     f"Sequence halted at step {index + 1}: {result}. "
@@ -819,8 +920,8 @@ class SequenceTool(BaseTool):
             time.sleep(0.5)
 
         _publish_feedback(
-            self.connector, 
-            "[LARIC]: Sequence completed successfully."
+            self.connector,
+            _("[LARIC]: Sequence completed successfully.")
         )
         return (
             "SUCCESS. All sequence steps executed successfully. "
@@ -845,7 +946,14 @@ class NavigationTool(BaseTool):
         description: Read by the LLM to decide when to invoke this tool.
         args_schema: Pydantic model validating input.
         connector: Active 'ROS2Connector' instance.
-        shared_state: Shared mutable dictionary ('abort_flag', 'is_busy').
+        abort_event: Shared 'threading.Event'; observed by the polling loop
+            so 'StopTool' can interrupt a long mission.
+        motion_lock: Shared 'threading.Lock' serialising motion commands.
+        localised_event: Shared 'threading.Event'; prerequisite for sending
+            navigation goals.
+        _rai_nav_tool: RAI 'NavigateToPoseTool' that sends the goal.
+        _rai_nav_feedback_tool: RAI helper for progress feedback.
+        _rai_nav_result_tool: RAI helper for the final result status.
     """
 
     name: str = "navigate_to_location"
@@ -859,26 +967,38 @@ class NavigationTool(BaseTool):
     args_schema: Type[BaseModel] = NavigationInput
     return_direct: bool = True
 
-    connector: Any = None
-    shared_state: dict = None
-    _rai_nav_tool: Any = None
+    connector:            Any = None
+    abort_event:          Any = None
+    motion_lock:          Any = None
+    localised_event:      Any = None
+    _rai_nav_tool:        Any = None
     _rai_nav_feedback_tool: Any = None
     _rai_nav_result_tool: Any = None
 
-    def __init__(self, connector: ROS2Connector, shared_state: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        localised_event: threading.Event,
+        **kwargs,
+    ) -> None:
         """
         Initialises NavigationTool and its internal RAI sub-tools.
 
         Args:
             connector: Active 'ROS2Connector' used to communicate with the
                 Nav2 '/navigate_to_pose' action server.
-            shared_state: Shared mutable dictionary with 'abort_flag' and
-                'is_busy' keys.
+            abort_event: Threading event to signal abort requests.
+            motion_lock: Threading lock to synchronize motion commands.
+            localised_event: Threading event to signal localisation status.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
         self.connector = connector
-        self.shared_state = shared_state
+        self.abort_event = abort_event
+        self.motion_lock = motion_lock
+        self.localised_event = localised_event
         self._rai_nav_tool = NavigateToPoseTool(connector=connector)
         self._rai_nav_feedback_tool = GetNavigateToPoseFeedbackTool(
             connector=connector
@@ -908,172 +1028,181 @@ class NavigationTool(BaseTool):
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
             'ACTION FAILED', or 'ERROR'.
         """
-        # 0. Blabla
-        if not self.shared_state.get("is_localised", False):
+        # 0. Check preconditions
+        if not self.localised_event.is_set():
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
+                self.connector,
+                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                  "Estimate' in RViz, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
-        if self.shared_state.get("is_busy", False):
+        # See MoveTool for the rationale on the 'not' here: acquire() returns
+        # True on success, so we reject only when it returns False (lock busy).
+        if not self.motion_lock.acquire(blocking=False):
             _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Another action is currently in progress. "
-                "Please wait for it to complete or use the 'Stop' tool to "
-                "abort it before issuing a new command."
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to abort it "
+                  "before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
 
-        # 1. Resolve destination: semantic name takes priority over raw coords
-        if target_x is not None and target_y is not None:
-            x, y = target_x, target_y
-            yaw_rad = math.radians(target_yaw)
-            dest_label = f"coordinates ({x:.2f}, {y:.2f})"
+        try:
+            # 1. Resolve destination: semantic name takes priority over raw coords
+            if target_x is not None and target_y is not None:
+                x, y = target_x, target_y
+                yaw_rad = math.radians(target_yaw)
+                dest_label = _("coordinates ({x:.2f}, {y:.2f})").format(x=x, y=y)
 
-        elif location_name:
-            loc = location_name.lower().strip()
-            if loc not in KNOWN_LOCATIONS:
+            elif location_name:
+                loc = location_name.lower().strip()
+                if loc not in KNOWN_LOCATIONS:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Error - The location '{loc}' was not found "
+                          "in the semantic map of known locations. You can ask "
+                          "for the known locations.")
+                        .format(loc=loc)
+                    )
+                    return (
+                        f"ERROR. The Location '{loc}' was not found in "
+                        "the semantic map of known locations. "
+                        "DO NOT CALL ANY OTHER TOOLS. "
+                    )
+                entry = KNOWN_LOCATIONS[loc]
+                x, y = entry["x"], entry["y"]
+                yaw_rad = entry["yaw"]
+                dest_label = f"'{loc.replace('_', ' ')}'"
+
+            else:
                 _publish_feedback(
                     self.connector,
-                    f"[LARIC] - Error: The Location '{loc}' was not found in " 
-                    "the semantic map of known locations. You can ask for the " 
-                    "known locations."
+                    _("[LARIC]: Error - No valid destination provided. You can "
+                      "ask for the known locations.")
                 )
                 return (
-                    f"ERROR. The Location '{loc}' was not found in " 
-                    "the semantic map of known locations. "
-                    "DO NOT CALL ANY OTHER TOOLS. "
+                    "ERROR. No valid destination provided. "
+                    "DO NOT CALL ANY OTHER TOOLS."
                 )
-            entry = KNOWN_LOCATIONS[loc]
-            x, y = entry["x"], entry["y"]
-            yaw_rad = entry["yaw"]
-            dest_label = f"'{loc.replace('_', ' ')}'"
 
-        else:
+            self.abort_event.clear()
+
+            # 2. Announce intent
             _publish_feedback(
                 self.connector,
-                "[LARIC] - Error: No valid destination provided. You can ask for "
-                "the known locations."
-            )
-            return (
-                "ERROR. No valid destination provided. "
-                "DO NOT CALL ANY OTHER TOOLS."
+                _("[LARIC]: Navigating to {dest}...").format(dest=dest_label)
             )
 
-        # 2. Announce intent and reset shared state
-        _publish_feedback(
-            self.connector, 
-            f"[LARIC]: Navigating to {dest_label}..."
-        )
-        self.shared_state["abort_flag"] = False
-        self.shared_state["is_busy"] = True
-
-        # 3. Send the NavigateToPose goal via RAI
-        try:
-            start_result = str(
+            try: 
+                # 3. Send the NavigateToPose goal via RAI
+                ''' DEBUG 1
+                start_result = str(
+                    self._rai_nav_tool._run(x=x, y=y, z=0.0, yaw=yaw_rad)
+                ).strip()
+                '''
                 self._rai_nav_tool._run(x=x, y=y, z=0.0, yaw=yaw_rad)
-            ).strip()
 
-            # TODO: Comprobar la palabra que emplea RAI para los errores de Nav2
-            # -- DEBUG (ELIMINATE) --------------------------------------------
-            print(f"\n[DEBUG 952] {start_result}\n") # navigating to pose
+            # -----------------------------------------------------------------
+            # print(f"\n[DEBUG 1] {start_result}\n") # navigating to pose
             # -----------------------------------------------------------------
 
-        except Exception as exc:
-            # -- DEBUG (ELIMINATE) --------------------------------------------
-            print(f"\n[DEBUG 957] {exc}\n") # Action goal was not accepted
-            # -----------------------------------------------------------------
-            self.shared_state["is_busy"] = False
-            _publish_feedback(
-                self.connector, 
-                "[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                "Estimate' in RViz, then retry."
-            )
-            return (
-                f"ERROR. Failed to send navigation goal: {exc}. "
-                "DO NOT CALL ANY OTHER TOOLS." 
-            )
-
-        # 4. Poll for the navigation result (maximum 5 minutes)
-        # Polling runs on the agent thread to keep abort_flag responsive.
-        # The agent cannot accept new tool calls while this loop runs; StopTool
-        # sets abort_flag from a concurrent think() thread to break out early.
-        timeout = 300.0
-        elapsed = 0.0
-        poll_interval = 0.5
-
-        while elapsed < timeout:
-
-            # Check whether StopTool has requested an abort
-            if self.shared_state.get("abort_flag", False):
-                self.shared_state["is_busy"] = False
+            except Exception as exc:
+                # -----------------------------------------------------------------
+                # print(f"\n[DEBUG 2] {exc}\n") # Action goal was not accepted
+                # -----------------------------------------------------------------
                 _publish_feedback(
-                    self.connector, 
-                    f"[LARIC]: Navigation to {dest_label} cancelled."
+                    self.connector,
+                    _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
+                      "Estimate' in RViz, then retry.")
                 )
                 return (
-                    "ACTION ABORTED. User stopped the navigation. "
+                    f"ERROR. Failed to send navigation goal: {exc}. "
                     "DO NOT CALL ANY OTHER TOOLS." 
                 )
 
-            # Query Nav2 for the current goal status
-            try:
-                nav_result = str(self._rai_nav_result_tool._run()).strip()
+            # 4. Poll for the navigation result (maximum 5 minutes)
+            # Polling runs on the agent thread to keep abort_flag responsive.
+            # The agent cannot accept new tool calls while this loop runs; StopTool
+            # sets abort_flag from a concurrent think() thread to break out early.
+            timeout = 300.0
+            elapsed = 0.0
+            poll_interval = 0.5
 
-                # -- DEBUG (ELIMINATE) ----------------------------------------
-                print(f"\n[DEBUG 997] Navigation result: {nav_result}\n") # Action is not done yet, 6 (ABORTED), 4 (SUCCEED)
-                # -------------------------------------------------------------
+            while elapsed < timeout:
 
-                if nav_result == str(GoalStatus.STATUS_SUCCEEDED):
-                    self.shared_state["is_busy"] = False
-                    _publish_feedback(
-                        self.connector, 
-                        f"[LARIC]: Arrived at {dest_label}.")
-                    return (
-                        f"SUCCESS. Arrived at {dest_label}. "
-                        "DO NOT CALL ANY OTHER TOOLS." 
-                    )
-
-                elif nav_result in [
-                    str(GoalStatus.STATUS_ABORTED), 
-                    str(GoalStatus.STATUS_CANCELED)
-                ]:
-                    self.shared_state["is_busy"] = False
+                # Check whether StopTool has requested an abort
+                if self.abort_event.is_set():
                     _publish_feedback(
                         self.connector,
-                        f"[LARIC]: Error - Could not reach {dest_label}. "
-                        "Nav2 aborted."
+                        _("[LARIC]: Navigation to {dest} cancelled.")
+                        .format(dest=dest_label)
                     )
                     return (
-                        "ACTION FAILED. Nav2 could not find or execute a valid "
-                        "path. "
+                        "ACTION ABORTED. User stopped the navigation. "
                         "DO NOT CALL ANY OTHER TOOLS."
-                    ) 
+                    )
 
-            except Exception:
-                # Transient polling errors are non-fatal; continue waiting.
-                pass
+                # Query Nav2 for the current goal status
+                try:
+                    nav_result = str(self._rai_nav_result_tool._run()).strip()
 
-            time.sleep(poll_interval)
-            elapsed += poll_interval
+                    # -------------------------------------------------------------
+                    # print(f"\n[DEBUG 3] Navigation result: {nav_result}\n") # Action is not done yet, 6 (ABORTED), 4 (SUCCEED)
+                    # -------------------------------------------------------------
 
-        # 5. Timeout path
-        self.shared_state["is_busy"] = False
-        _publish_feedback(
-            self.connector,
-            f"[LARIC]: Error - Navigation to {dest_label} timed out (5 min)."
-        )
-        return (
-            "ERROR: Navigation timeout (5 minutes). "
-            "DO NOT CALL ANY OTHER TOOLS."
-        )
+                    if nav_result == str(GoalStatus.STATUS_SUCCEEDED):
+                        _publish_feedback(
+                            self.connector,
+                            _("[LARIC]: Arrived at {dest}.")
+                            .format(dest=dest_label)
+                        )
+                        return (
+                            f"SUCCESS. Arrived at {dest_label}. "
+                            "DO NOT CALL ANY OTHER TOOLS."
+                        )
+
+                    elif nav_result in [
+                        str(GoalStatus.STATUS_ABORTED),
+                        str(GoalStatus.STATUS_CANCELED)
+                    ]:
+                        _publish_feedback(
+                            self.connector,
+                            _("[LARIC]: Error - Could not reach {dest}. "
+                              "Nav2 aborted.")
+                            .format(dest=dest_label)
+                        )
+                        return (
+                            "ACTION FAILED. Nav2 could not find or execute a valid "
+                            "path. "
+                            "DO NOT CALL ANY OTHER TOOLS."
+                        )
+
+                except Exception:
+                    # Transient polling errors are non-fatal; continue waiting.
+                    pass
+
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+
+            # 5. Timeout path
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - Navigation to {dest} timed out (5 min).")
+                .format(dest=dest_label)
+            )
+            return (
+                "ERROR: Navigation timeout (5 minutes). "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+        
+        finally:
+            self.motion_lock.release()
 
 
 # ------------------------------------------------------------------------------
@@ -1092,7 +1221,10 @@ class GestureTool(BaseTool):
         description: Read by the LLM to decide when to invoke this tool.
         args_schema: Pydantic model validating input.
         connector: Active 'ROS2Connector' for '/cmd_vel' publication.
-        shared_state: Shared mutable state dictionary.
+        abort_event: Shared 'threading.Event'; observed between oscillation
+            steps so the gesture is interruptible.
+        motion_lock: Shared 'threading.Lock'; acquired so a gesture cannot
+            overlap a Nav2 motion (both would write '/cmd_vel').
     """
 
     name: str = "negation_gesture"
@@ -1107,21 +1239,30 @@ class GestureTool(BaseTool):
 
     # Pydantic/LangChain requires all non-default attributes to be declared
     # as class-level fields; they are assigned their values in __init__.
-    connector: Any = None
-    shared_state: dict = None
+    connector:   Any = None
+    abort_event: Any = None
+    motion_lock: Any = None
 
-    def __init__(self, connector: ROS2Connector, shared_state: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        **kwargs,
+    ) -> None:
         """
         Initialises GestureTool with the ROS 2 connector and shared state.
 
         Args:
             connector: Active 'ROS2Connector' for '/cmd_vel' publication.
-            shared_state: Shared mutable state dictionary.
+            abort_event: Threading event to signal abort requests.
+            motion_lock: Threading lock to synchronize motion commands.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
         self.connector = connector
-        self.shared_state = shared_state
+        self.abort_event = abort_event
+        self.motion_lock = motion_lock
 
     def _run(self, reason: str = "") -> str:
         """
@@ -1133,22 +1274,32 @@ class GestureTool(BaseTool):
         Returns:
             A status string prefixed with 'SUCCESS' or 'ACTION ABORTED'.
         """
-        # 1. Announce the gesture with the rejection reason
-        _publish_feedback(
-            self.connector, 
-            "[LARIC]: (Negation gesture) Request not executable. "
-            f"Reason: {reason}"
-        )
-
-        self.shared_state["abort_flag"] = False
-        self.shared_state["is_busy"] = True
-
-        # 2. Oscillation pattern: alternating left/right angular velocity
-        angular_steps = [1.0, -1.0, 1.0, -1.0]
+        if not self.motion_lock.acquire(blocking=False):
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to abort it "
+                  "before issuing a new command.")
+            )
+            return (
+                "ACTION FAILED. Another action is currently in progress. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
 
         try:
+            self.abort_event.clear()
+            # 1. Announce the gesture with the rejection reason
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: (Negation gesture) Request not executable. "
+                  "Reason: {reason}")
+                .format(reason=reason)
+            )
+
+            # 2. Oscillation pattern: alternating left/right angular velocity
+            angular_steps = [1.0, -1.0, 1.0, -1.0]
             for angular_z in angular_steps:
-                if self.shared_state.get("abort_flag", False):
+                if self.abort_event.is_set():
                     break
 
                 self.connector.send_message(
@@ -1171,10 +1322,10 @@ class GestureTool(BaseTool):
                 msg_type="geometry_msgs/msg/Twist",
             )
 
-            self.shared_state["is_busy"] = False
-
-            if self.shared_state.get("abort_flag", False):
-                _publish_feedback(self.connector, "[LARIC]: Gesture interrupted.")
+            if self.abort_event.is_set():
+                _publish_feedback(
+                    self.connector, _("[LARIC]: Gesture interrupted.")
+                )
                 return (
                     "ACTION ABORTED.  "
                     "DO NOT CALL ANY OTHER TOOLS."
@@ -1182,19 +1333,22 @@ class GestureTool(BaseTool):
 
             return (
                 f"SUCCESS. Negation gesture executed. Reason: {reason}. "
-                "DO NOT CALL ANY OTHER TOOLS." 
-            )
+                "DO NOT CALL ANY OTHER TOOLS."
+                )
 
         except Exception as exc:
-            self.shared_state["is_busy"] = False
+            # The 'finally' block below releases the motion_lock; no extra
+            # state cleanup is required here.
             _publish_feedback(
-                self.connector, 
-                f"[LARIC]: Error - Couldn't execute the negation gesture."
+                self.connector,
+                _("[LARIC]: Error - Couldn't execute the negation gesture.")
             )
             return (
                 f"ERROR executing gesture: {exc}. "
                 "DO NOT CALL ANY OTHER TOOLS." 
             )
+        finally:
+            self.motion_lock.release()
 
 
 # ------------------------------------------------------------------------------
@@ -1213,7 +1367,15 @@ class StopTool(BaseTool):
         description: Read by the LLM to decide when to invoke this tool.
         args_schema: Pydantic model validating input.
         connector: Active 'ROS2Connector' instance.
-        shared_state: Shared mutable dictionary ('abort_flag', 'is_busy').
+        abort_event: Shared 'threading.Event'; set here to signal every
+            polling motion tool to terminate immediately.
+        _cancel_nav_tool: RAI 'CancelNavigateToPoseTool' used to cancel any
+            active Nav2 goal.
+
+    Note:
+        Intentionally does NOT acquire 'motion_lock'. The whole point of this
+        tool is to interrupt a motion that already holds the lock; trying to
+        acquire it would deadlock.
     """
 
     name: str = "stop_robot"
@@ -1228,22 +1390,27 @@ class StopTool(BaseTool):
     args_schema: Type[BaseModel] = TriggerInput
     return_direct: bool = True
 
-    connector: Any = None
-    shared_state: dict = None
+    connector:       Any = None
+    abort_event:     Any = None
     _cancel_nav_tool: Any = None
 
-    def __init__(self, connector: ROS2Connector, shared_state: dict, **kwargs) -> None:
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        **kwargs,
+    ) -> None:
         """
         Initialises StopTool and its internal Nav2 cancellation helper.
 
         Args:
             connector: Active 'ROS2Connector'.
-            shared_state: Shared mutable state dictionary.
+            abort_event: Threading event to signal abort.
             **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
         """
         super().__init__(**kwargs)
         self.connector = connector
-        self.shared_state = shared_state
+        self.abort_event = abort_event
         self._cancel_nav_tool = CancelNavigateToPoseTool(connector=connector)
 
     def _run(self, **kwargs: Any) -> str:
@@ -1257,8 +1424,7 @@ class StopTool(BaseTool):
             A confirmation string indicating the stop was activated.
         """
         # 1. Signal all polling threads to terminate their current action
-        self.shared_state["abort_flag"] = True
-        self.shared_state["is_busy"] = False
+        self.abort_event.set()
 
         # 2. Cancel any active Nav2 goal.
         try:
@@ -1284,8 +1450,8 @@ class StopTool(BaseTool):
             pass
 
         _publish_feedback(
-            self.connector, 
-            "[LARIC]: Stop activated. All motion halted."
+            self.connector,
+            _("[LARIC]: Stop activated. All motion halted.")
         )
         return (
             "SUCCESS. Stop activated. All Nav2 goals cancelled. "
@@ -1374,37 +1540,74 @@ def main() -> None:
     # feedback message is sent.
     time.sleep(3.0)
 
-    _publish_feedback(ros_connector, "[SYSTEM]: Starting LARIC Agent...")
+    _publish_feedback(ros_connector, _("[SYSTEM]: Starting LARIC Agent..."))
 
-    # 2. Create the shared state dictionary
-    # This dict is accessed by multiple threads via the abort_flag and is_busy
-    # keys. 
-    # TODO:
-    # A plain dict is used here to preserve the current architecture;
-    # see the Architectural Critique for recommended improvements using
-    # threading.Lock or threading.Event.
-    robot_state: dict = {
-        "abort_flag":   False,  # Set by StopTool; polled by all motion tools
-        "is_busy":      False,  # Set by motion tools at start/end of actions
-        "is_localised": False   # Blabla
-    }
+    # 2. Initialise concurrency primitives.
+    #
+    #    abort_event (threading.Event):
+    #      Set by StopTool to cancel active motion tools. Each motion tool clears
+    #      it at the start of a new action. Using an Event rather than a plain bool
+    #      provides atomic set/is_set semantics without an explicit lock.
+    #
+    #    motion_lock (threading.Lock):
+    #      Prevents two motion commands from running concurrently. Acquired
+    #      non-blockingly at the entry of each motion _run(); if unavailable the
+    #      tool returns an explicit error immediately.
+    #      StopTool intentionally does NOT acquire this lock so it can always
+    #      interrupt an in-progress motion.
+    #
+    #    localised_event (threading.Event):
+    #      Set when /initialpose is received (user completed '2D Pose Estimate'
+    #      in RViz). Cleared when the localisation is lost (future improvement:
+    #      subscribe to AMCL status). All motion tools check this as a guard.
+    abort_event     = threading.Event()
+    motion_lock     = threading.Lock()
+    localised_event = threading.Event()
 
-    # 3. Instantiate LangChain tools (Dependency Injection)
-    # Each tool receives the connector and shared_state explicitly at
-    # construction time, making dependencies visible and testable.
-    _publish_feedback(ros_connector, "[SYSTEM]: Loading Nav2 tools...")
+    # 3. Instantiate LangChain tools (Dependency Injection).
+    #    Each tool receives its dependencies explicitly at construction time,
+    #    making coupling visible and testable.
+    _publish_feedback(ros_connector, _("[SYSTEM]: Loading Nav2 tools..."))
     tools = [
-        SpinTool(connector=ros_connector, shared_state=robot_state),
-        MoveTool(connector=ros_connector, shared_state=robot_state),
-        SequenceTool(connector=ros_connector, shared_state=robot_state),
-        NavigationTool(connector=ros_connector, shared_state=robot_state),
-        GestureTool(connector=ros_connector, shared_state=robot_state),
-        StopTool(connector=ros_connector, shared_state=robot_state),
+        SpinTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        ),
+        MoveTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        ),
+        SequenceTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        ),
+        NavigationTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        ),
+        GestureTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+        ),
+        # StopTool receives only abort_event, not motion_lock — by design.
+        StopTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+        ),
     ]
 
     # 4. Connect to the LLM backend
-    _publish_feedback(ros_connector, "[SYSTEM]: Connecting to LLM...")
-    if from_lab:
+    _publish_feedback(ros_connector, _("[SYSTEM]: Connecting to LLM..."))
+    if is_from_lab:
         llm = ChatOllama(temperature=0, model=MODEL, base_url=URL)
     else:
         llm = ChatGroq(
@@ -1448,8 +1651,11 @@ def main() -> None:
         if not user_text:
             return
 
-        _publish_feedback(ros_connector, f"[LARIC]: Heard: '{user_text}'")
-        _publish_feedback(ros_connector, "[LARIC]: Thinking...")
+        _publish_feedback(
+            ros_connector,
+            _("[LARIC]: Heard: '{text}'").format(text=user_text)
+        )
+        _publish_feedback(ros_connector, _("[LARIC]: Thinking..."))
 
         def think() -> None:
             """
@@ -1459,10 +1665,11 @@ def main() -> None:
                 result = agent_executor.invoke({"input": user_text})
                 response = result.get("output", "").strip()
 
-                #Blabla
+                # Check for internal returns that should not be published as 
+                # feedback
                 is_internal_return = (
-                    "DO NOT CALL ANY OTHER TOOLS" in response or
-                    response.startswith((
+                    "DO NOT CALL ANY OTHER TOOLS" in response 
+                    or response.startswith((
                         "SUCCESS.", "ACTION FAILED.", "ACTION ABORTED.", 
                         "ERROR:", "ERROR."
                     ))
@@ -1475,38 +1682,48 @@ def main() -> None:
                         f"[LARIC]: {formatted_response}"
                     )
             except Exception as exc:
-                _publish_feedback(ros_connector, f"[LARIC]: ERROR - {exc}")
+                _publish_feedback(
+                    ros_connector,
+                    _("[LARIC]: ERROR - {exc}").format(exc=exc)
+                )
 
         # Daemon threads are automatically joined when the main process exits.
         threading.Thread(target=think, daemon=True).start()
 
     try:
         ros_connector.register_callback(
-            source    = "/from_human",
-            topic_name= "/from_human",
-            msg_type  = "std_msgs/msg/String",
-            callback  = on_human_input
+            source     = "/from_human",
+            topic_name = "/from_human",
+            msg_type   = "std_msgs/msg/String",
+            callback   = on_human_input
         )
     except Exception as exc:
         _publish_feedback(
-            ros_connector, 
-            f"[SYSTEM]: Warning - Could not subscribe to /from_human: {exc}"
+            ros_connector,
+            _("[SYSTEM]: Warning - Could not subscribe to /from_human: {exc}")
+            .format(exc=exc)
         )
 
-    # 7. Blabla
+    # 7. Initial pose listener for localisation detection
     def on_initial_pose(msg: ROS2Message) -> None:
         """
         Detects when the user sets the initial pose in RViz.
 
-        Blabla
+        Updates the global state to mark the robot as localised, which is a 
+        mandatory prerequisite before the agent is allowed to send any 
+        movement goals to the Nav2 action servers.
+
+        Args:
+            msg: Incoming 'ROS2Message' wrapping a 
+                 'geometry_msgs/PoseWithCovarianceStamped' payload emitted 
+                 by the RViz '2D Pose Estimate' tool.
         """
-        if not robot_state.get("is_localised", False):
-            robot_state["is_localised"] = True
-            _publish_feedback(
-                ros_connector,
-                "[LARIC]: Robot localised via '2D Pose Estimate'. "
-                "Ready for commands."
-            )
+        localised_event.set()
+        _publish_feedback(
+            ros_connector,
+            _("[LARIC]: Robot localised via '2D Pose Estimate'. "
+              "Ready for commands.")
+        )
 
     try:
         ros_connector.register_callback(
@@ -1517,19 +1734,10 @@ def main() -> None:
         )
     except Exception as exc:
         _publish_feedback(
-            ros_connector, 
-            f"[SYSTEM]: Warning - Could not subscribe to /initialpose: {exc}"
+            ros_connector,
+            _("[SYSTEM]: Warning - Could not subscribe to /initialpose: {exc}")
+            .format(exc=exc)
         )
-
-    _publish_feedback(
-        ros_connector,
-        "[LARIC]: Agent ready. Listening on /from_human."
-    )
-    _publish_feedback(
-        ros_connector,
-        "[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the "
-        "robot before sending commands."
-    )
 
     # 8. Hardware Emergency Stop Listener 
     def on_emergency_stop(msg: ROS2Message) -> None:
@@ -1537,12 +1745,18 @@ def main() -> None:
         Triggers instantly upon receiving the E-Stop signal from the UI.
         Bypasses the LLM entirely to guarantee deterministic braking.
 
-        Blabla
+        Locates the registered 'stop_robot' tool and invokes its underlying
+        hardware-halt routine directly, cancelling any active Nav2 goals or
+        running motion threads.
+
+        Args:
+            msg: Incoming 'ROS2Message' wrapping a 'std_msgs/Bool' payload.
+                 If the boolean value is True, the emergency stop is applied.
         """
         if msg.payload.data:
             _publish_feedback(
-                ros_connector, 
-                "[LARIC]: EMERGENCY STOP ACTIVATED."
+                ros_connector,
+                _("[LARIC]: EMERGENCY STOP ACTIVATED.")
             )
             
             # Retrieve the StopTool instance from the tools list
@@ -1561,9 +1775,55 @@ def main() -> None:
         )
     except Exception as exc:
         _publish_feedback(
-            ros_connector, 
-            f"[SYSTEM]: Warning - Could not subscribe to /emergency_stop: {exc}"
+            ros_connector,
+            _("[SYSTEM]: Warning - Could not subscribe to /emergency_stop: {exc}")
+            .format(exc=exc)
         )
+
+    # ----- /language_changed listener -----
+    # The HMI process publishes the new language code here whenever the
+    # operator switches it in the dropdown. We propagate it to our local
+    # gettext catalog so subsequent '_()' calls in this process translate
+    # correctly. Without this subscription, only the HMI would update.
+    def on_language_changed(msg: ROS2Message) -> None:
+        """
+        Updates the agent's translator when the HMI changes language.
+
+        Args:
+            msg: Incoming 'ROS2Message' wrapping a 'std_msgs/String' whose
+                 'data' field is the new language code (e.g. "en", "es").
+        """
+        try:
+            new_lang = msg.payload.data.strip()
+        except AttributeError:
+            return
+        if not new_lang:
+            return
+        set_language(new_lang)
+
+    try:
+        ros_connector.register_callback(
+            source="/language_changed",
+            topic_name="/language_changed",
+            msg_type="std_msgs/msg/String",
+            callback=on_language_changed
+        )
+    except Exception as exc:
+        _publish_feedback(
+            ros_connector,
+            _("[SYSTEM]: Warning - Could not subscribe to /language_changed: {exc}")
+            .format(exc=exc)
+        )
+
+    _publish_feedback(
+        ros_connector,
+        _("[LARIC]: Agent ready. Listening on /from_human.")
+    )
+    _publish_feedback(
+        ros_connector,
+        _("[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the "
+          "robot before sending commands.")
+    )
 
     # 9. Keep-alive loop
     try:
@@ -1571,8 +1831,8 @@ def main() -> None:
             time.sleep(1.0)
     except KeyboardInterrupt:
         _publish_feedback(
-            ros_connector, 
-            "[SYSTEM]: Shutting down LARIC Agent..."
+            ros_connector,
+            _("[SYSTEM]: Shutting down LARIC Agent...")
         )
 
 

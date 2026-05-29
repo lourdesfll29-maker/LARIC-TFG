@@ -1,0 +1,279 @@
+# Spanish translation of the LARIC system messages.
+# Copyright (c) 2026 LARIC.
+# This file is distributed under the same license as the LARIC package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: LARIC\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-26 12:00+0200\n"
+"PO-Revision-Date: 2026-05-26 12:00+0200\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.9\n"
+
+# ----------------------------------------------------------------------------
+# laric_interface.py
+# ----------------------------------------------------------------------------
+
+msgid "LARIC - Voice & Text Interface"
+msgstr "LARIC - Interfaz de voz y texto"
+
+msgid "HOLD [SPACE] TO SPEAK"
+msgstr "MANTENER [ESPACIO] PARA HABLAR"
+
+msgid "Type a command and press Enter..."
+msgstr "Escribe un comando y pulsa Intro..."
+
+msgid "EMERGENCY STOP (Ctrl+E)"
+msgstr "PARADA DE EMERGENCIA (Ctrl+E)"
+
+msgid "[SYSTEM] Language changed."
+msgstr "[SISTEMA] Idioma cambiado."
+
+msgid "[SYSTEM] Shutting down entire LARIC system..."
+msgstr "[SISTEMA] Apagando todo el sistema LARIC..."
+
+msgid "[ERROR] Shutdown script not found."
+msgstr "[ERROR] Script de apagado no encontrado."
+
+msgid "[USER - TEXT]: {}"
+msgstr "[USUARIO - TEXTO]: {}"
+
+msgid "[EMERGENCY STOP] Robot halted by user."
+msgstr "[PARADA DE EMERGENCIA] Robot detenido por el usuario."
+
+msgid "[RECORDING IN PROGRESS...]"
+msgstr "[GRABANDO...]"
+
+msgid "[PROCESSING AUDIO...]"
+msgstr "[PROCESANDO AUDIO...]"
+
+msgid "[HARDWARE ERROR] Microphone: {}"
+msgstr "[ERROR DE HARDWARE] Micrófono: {}"
+
+msgid "[WARNING] Audio buffer is empty. Nothing to transcribe."
+msgstr "[ADVERTENCIA] Buffer de audio vacío. Nada que transcribir."
+
+msgid "[WARNING] Recording too short ({:.2f}s &lt; {:.2f}s). Discarded."
+msgstr "[ADVERTENCIA] Grabación demasiado corta ({:.2f}s &lt; {:.2f}s). Descartada."
+
+msgid "[USER - VOICE]: {}"
+msgstr "[USUARIO - VOZ]: {}"
+
+msgid "[WARNING] No speech detected "
+msgstr "[ADVERTENCIA] No se detectó habla "
+
+msgid "(silence or unintelligible audio)."
+msgstr "(silencio o audio ininteligible)."
+
+msgid "[ERROR] Google STT API request failed: {}"
+msgstr "[ERROR] Falló la petición a la API Google STT: {}"
+
+msgid "[ERROR] Unexpected error during audio processing: {}"
+msgstr "[ERROR] Error inesperado durante el procesamiento de audio: {}"
+
+# ----------------------------------------------------------------------------
+# agent_logic.py — common errors
+# ----------------------------------------------------------------------------
+
+msgid ""
+"[LARIC]: Error - Ensure the robot is localised: use '2D Pose Estimate' in "
+"RViz, then retry."
+msgstr ""
+"[LARIC]: Error - Asegúrate de que el robot esté localizado: usa '2D Pose "
+"Estimate' en RViz y vuelve a intentarlo."
+
+msgid ""
+"[LARIC]: Error - Another action is currently in progress. Please wait for "
+"it to complete or use 'stop_robot' to abort it before issuing a new command."
+msgstr ""
+"[LARIC]: Error - Hay otra acción en curso. Espera a que termine o usa "
+"'stop_robot' para abortarla antes de enviar un nuevo comando."
+
+# ----------------------------------------------------------------------------
+# SpinTool
+# ----------------------------------------------------------------------------
+
+msgid "[LARIC]: Starting rotation of {angle}°..."
+msgstr "[LARIC]: Iniciando rotación de {angle}°..."
+
+msgid "[LARIC]: Rotation cancelled."
+msgstr "[LARIC]: Rotación cancelada."
+
+msgid "[LARIC]: Rotation completed successfully."
+msgstr "[LARIC]: Rotación completada con éxito."
+
+msgid "[LARIC]: Error - Spin timed out."
+msgstr "[LARIC]: Error - Tiempo de espera agotado durante la rotación."
+
+# ----------------------------------------------------------------------------
+# MoveTool
+# ----------------------------------------------------------------------------
+
+msgid "forward"
+msgstr "hacia adelante"
+
+msgid "backward"
+msgstr "hacia atrás"
+
+msgid "[LARIC]: Moving {dist:.2f} m {direction} at {speed:.2f} m/s..."
+msgstr "[LARIC]: Moviendo {dist:.2f} m {direction} a {speed:.2f} m/s..."
+
+msgid "[LARIC]: Movement cancelled."
+msgstr "[LARIC]: Movimiento cancelado."
+
+msgid "[LARIC]: Movement completed successfully."
+msgstr "[LARIC]: Movimiento completado con éxito."
+
+msgid "[LARIC]: Error - Movement timed out."
+msgstr "[LARIC]: Error - Tiempo de espera agotado durante el movimiento."
+
+# ----------------------------------------------------------------------------
+# SequenceTool
+# ----------------------------------------------------------------------------
+
+msgid "[LARIC]: Starting sequence of {n} steps..."
+msgstr "[LARIC]: Iniciando secuencia de {n} pasos..."
+
+msgid "[LARIC]: Sequence aborted between steps."
+msgstr "[LARIC]: Secuencia abortada entre pasos."
+
+msgid "meters"
+msgstr "metros"
+
+msgid "degrees"
+msgstr "grados"
+
+msgid "[LARIC]: Step {i}/{n}: {action} -> {value} {unit}."
+msgstr "[LARIC]: Paso {i}/{n}: {action} -> {value} {unit}."
+
+msgid ""
+"[LARIC]: Error - Unknown action type '{action}' at step {i}. Valid types "
+"are 'move' and 'spin'."
+msgstr ""
+"[LARIC]: Error - Tipo de acción desconocido '{action}' en el paso {i}. Los "
+"tipos válidos son 'move' y 'spin'."
+
+msgid "[LARIC]: Sequence interrupted at step {i}."
+msgstr "[LARIC]: Secuencia interrumpida en el paso {i}."
+
+msgid "[LARIC]: Sequence completed successfully."
+msgstr "[LARIC]: Secuencia completada con éxito."
+
+# ----------------------------------------------------------------------------
+# NavigationTool
+# ----------------------------------------------------------------------------
+
+msgid "coordinates ({x:.2f}, {y:.2f})"
+msgstr "las coordenadas ({x:.2f}, {y:.2f})"
+
+msgid ""
+"[LARIC]: Error - The location '{loc}' was not found in the semantic map of "
+"known locations. You can ask for the known locations."
+msgstr ""
+"[LARIC]: Error - La ubicación '{loc}' no se encuentra en el mapa semántico "
+"de ubicaciones conocidas. Puedes preguntar por las ubicaciones conocidas."
+
+msgid ""
+"[LARIC]: Error - No valid destination provided. You can ask for the known "
+"locations."
+msgstr ""
+"[LARIC]: Error - No se proporcionó un destino válido. Puedes preguntar por "
+"las ubicaciones conocidas."
+
+msgid "[LARIC]: Navigating to {dest}..."
+msgstr "[LARIC]: Navegando hacia {dest}..."
+
+msgid "[LARIC]: Navigation to {dest} cancelled."
+msgstr "[LARIC]: Navegación hacia {dest} cancelada."
+
+msgid "[LARIC]: Arrived at {dest}."
+msgstr "[LARIC]: Llegada a {dest}."
+
+msgid "[LARIC]: Error - Could not reach {dest}. Nav2 aborted."
+msgstr "[LARIC]: Error - No se pudo llegar a {dest}. Nav2 ha abortado."
+
+msgid "[LARIC]: Error - Navigation to {dest} timed out (5 min)."
+msgstr "[LARIC]: Error - La navegación a {dest} agotó el tiempo (5 min)."
+
+# ----------------------------------------------------------------------------
+# GestureTool
+# ----------------------------------------------------------------------------
+
+msgid "[LARIC]: (Negation gesture) Request not executable. Reason: {reason}"
+msgstr "[LARIC]: (Gesto de negación) Solicitud no ejecutable. Motivo: {reason}"
+
+msgid "[LARIC]: Gesture interrupted."
+msgstr "[LARIC]: Gesto interrumpido."
+
+msgid "[LARIC]: Error - Couldn't execute the negation gesture."
+msgstr "[LARIC]: Error - No se pudo ejecutar el gesto de negación."
+
+# ----------------------------------------------------------------------------
+# StopTool
+# ----------------------------------------------------------------------------
+
+msgid "[LARIC]: Stop activated. All motion halted."
+msgstr "[LARIC]: Parada activada. Todos los movimientos detenidos."
+
+# ----------------------------------------------------------------------------
+# Agent main() — system lifecycle
+# ----------------------------------------------------------------------------
+
+msgid "[SYSTEM]: Starting LARIC Agent..."
+msgstr "[SISTEMA]: Iniciando el Agente LARIC..."
+
+msgid "[SYSTEM]: Loading Nav2 tools..."
+msgstr "[SISTEMA]: Cargando herramientas de Nav2..."
+
+msgid "[SYSTEM]: Connecting to LLM..."
+msgstr "[SISTEMA]: Conectando al LLM..."
+
+msgid "[LARIC]: Heard: '{text}'"
+msgstr "[LARIC]: He escuchado: '{text}'"
+
+msgid "[LARIC]: Thinking..."
+msgstr "[LARIC]: Pensando..."
+
+msgid "[LARIC]: ERROR - {exc}"
+msgstr "[LARIC]: ERROR - {exc}"
+
+msgid "[SYSTEM]: Warning - Could not subscribe to /from_human: {exc}"
+msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /from_human: {exc}"
+
+msgid ""
+"[LARIC]: Robot localised via '2D Pose Estimate'. Ready for commands."
+msgstr ""
+"[LARIC]: Robot localizado mediante '2D Pose Estimate'. Listo para recibir "
+"comandos."
+
+msgid "[SYSTEM]: Warning - Could not subscribe to /initialpose: {exc}"
+msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /initialpose: {exc}"
+
+msgid "[LARIC]: EMERGENCY STOP ACTIVATED."
+msgstr "[LARIC]: PARADA DE EMERGENCIA ACTIVADA."
+
+msgid "[SYSTEM]: Warning - Could not subscribe to /emergency_stop: {exc}"
+msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /emergency_stop: {exc}"
+
+msgid "[SYSTEM]: Warning - Could not subscribe to /language_changed: {exc}"
+msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /language_changed: {exc}"
+
+msgid "[LARIC]: Agent ready. Listening on /from_human."
+msgstr "[LARIC]: Agente listo. Escuchando en /from_human."
+
+msgid ""
+"[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the robot "
+"before sending commands."
+msgstr ""
+"[LARIC]: IMPORTANTE - Usa '2D Pose Estimate' en RViz para localizar el "
+"robot antes de enviar comandos."
+
+msgid "[SYSTEM]: Shutting down LARIC Agent..."
+msgstr "[SISTEMA]: Apagando el Agente LARIC..."
+

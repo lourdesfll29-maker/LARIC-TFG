@@ -24,3 +24,4 @@ killall -9 gzserver gzclient rviz2 2>/dev/null || true
 ros2 daemon stop || true
 
 echo "Cleanup complete. System offline."
+

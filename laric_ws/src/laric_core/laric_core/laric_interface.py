@@ -5,7 +5,8 @@ Copyright (c) 2026 LARIC. All rights reserved.
 Implements the graphical user interface for the LARIC system, combining a
 ROS 2 node and a PyQt5 widget into a single object. Provides two input
 modalities (Push-to-Talk voice and keyboard text), a real-time colour-coded
-feedback log, and a direct hardware-level emergency stop button.
+feedback log, a language selector, and a direct hardware-level emergency
+stop button.
 
 Architecture note:
     This module inherits from both 'rclpy.node.Node' and 'PyQt5.QWidget'.
@@ -18,12 +19,19 @@ Architecture note:
     ROS 2 callbacks) are routed through a 'pyqtSignal' to guarantee they
     execute exclusively on the Qt main thread, preventing data races on the
     underlying widget state.
+
+Internationalisation:
+    Every operator-visible string goes through 'i18n._()'. The dropdown
+    drives 'i18n.set_language(...)' locally AND publishes the new language
+    code on the '/language_changed' ROS 2 topic so that 'agent_logic.py'
+    (a separate process) can update its translator too.
 """
 
 import io
 import os
 import queue
 import sys
+import tempfile
 import threading
 import subprocess
 from contextlib import contextmanager
@@ -45,6 +53,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
+    QComboBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -54,8 +64,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-# -- Project configuration -------------------------------------------------------
+# -- Project configuration & i18n --------------------------------------------
 from config import SHUTDOWN_SCRIPT_PATH
+from i18n import _, set_language
 
 
 # ==============================================================================
@@ -132,9 +143,12 @@ class InterfaceNode(Node, QWidget):
         log_signal (pyqtSignal): Qt signal used to safely append HTML text to
             the feedback log from any thread. Accepts '(text: str, color: str)'.
         pub_human: ROS 2 publisher for 'std_msgs/String' on '/from_human'.
-        pub_emergency_stop: ROS 2 publisher for 'std_msgs/Bool' on 
-            '/emergency_stop'.
         pub_cmd_vel: ROS 2 publisher for 'geometry_msgs/Twist' on '/cmd_vel'.
+        pub_emergency_stop: ROS 2 publisher for 'std_msgs/Bool' on
+            '/emergency_stop'.
+        pub_language: ROS 2 publisher for 'std_msgs/String' on
+            '/language_changed'. Broadcasts the active language code so the
+            agent process can update its gettext catalog in sync with the HMI.
         sub_feedback: ROS 2 subscription to 'std_msgs/String' on
             '/robot_feedback'.
         audio_queue (queue.Queue): Thread-safe buffer that accumulates raw
@@ -142,11 +156,14 @@ class InterfaceNode(Node, QWidget):
         is_recording (bool): 'True' while a PTT recording session is active.
         recognizer (sr.Recognizer): Google Speech Recognition engine instance.
         stream: Active 'sounddevice.InputStream', or 'None' when idle.
+        stt_language (str): Locale code passed to the Google STT API
+            (e.g. 'en-US', 'es-ES'); kept in sync with the dropdown.
         stop_timer (QTimer): Single-shot debounce timer for the PTT key release.
         ros_timer (QTimer): Periodic timer that drives the ROS 2 spin loop.
         label (QLabel): Status indicator widget showing the current PTT state.
         log (QTextEdit): Read-only feedback log widget.
         text_input (QLineEdit): Manual text command input field.
+        language_selector (QComboBox): EN/ES language selector dropdown.
         emergency_btn (QPushButton): Hardware-level emergency stop button.
     """
 
@@ -160,7 +177,7 @@ class InterfaceNode(Node, QWidget):
         #    Order matters: Node.__init__ must precede QWidget.__init__ to
         #    ensure the ROS 2 node name is registered before Qt sets up the
         #    widget hierarchy.
-        Node.__init__(self, "interfaz_hmi_rai")
+        Node.__init__(self, ("laric_interface"))
         QWidget.__init__(self)
 
         # 2. Connect the thread-safe log signal to its GUI slot.
@@ -168,13 +185,27 @@ class InterfaceNode(Node, QWidget):
         #    on the Qt main thread, regardless of which thread emits the signal.
         self.log_signal.connect(self.update_log_slot)
 
-        # 3. Create ROS 2 publisher and subscriber
+        # 3. Create ROS 2 publishers and subscribers
+        #    - /from_human        : user text/voice routed to the agent
+        #    - /cmd_vel           : direct zero-Twist for the hardware E-Stop
+        #    - /emergency_stop    : Bool flag the agent listens to for E-Stop
+        #    - /language_changed  : new language code for the agent's i18n
+        #    - /robot_feedback    : status lines from the agent (subscription)
         self.pub_human = self.create_publisher(String, "/from_human", 10)
 
         # Direct /cmd_vel and /emergency_stop publishers for hardware halt
         self.pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self.pub_emergency_stop = self.create_publisher(
             Bool, "/emergency_stop", 10
+        )
+
+        # /language_changed broadcasts the active language code ("en", "es", ...)
+        # to the agent_logic process so its '_()' translator stays in sync with
+        # the HMI dropdown. The two run in separate processes (see
+        # start_simulation.sh), so this topic is the only way the agent learns
+        # about a language switch.
+        self.pub_language = self.create_publisher(
+            String, "/language_changed", 10
         )
 
         self.sub_feedback = self.create_subscription(
@@ -186,6 +217,8 @@ class InterfaceNode(Node, QWidget):
         self.is_recording: bool = False
         self.recognizer: sr.Recognizer = sr.Recognizer()
         self.stream = None
+
+        self.stt_language = "en-US"  # Default to English; can be changed to "es-ES" for Spanish, etc.
 
         # 5. Configure the PTT debounce timer.
         #    Single-shot: fires once after PTT_DEBOUNCE_MS milliseconds and then
@@ -220,22 +253,36 @@ class InterfaceNode(Node, QWidget):
         - A single-line text input for manual command entry.
         - A prominent emergency stop button.
         """
-        self.setWindowTitle("LARIC - Voice & Text Interface")
-        self.setGeometry(1200, 100, 450, 660)
+        self.setWindowTitle(_("LARIC - Voice & Text Interface"))
+        self.setGeometry(1300, 200, 500, 600)
         self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+        """)
+
         layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
 
         # -- Status label (PTT indicator) ------------------------------------
-        self.label = QLabel("HOLD [SPACE] TO SPEAK")
+        self.label = QLabel(_("HOLD [SPACE] TO SPEAK"))
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setStyleSheet(
-            "font-size: 14px;"
-            "background: #333333;"
-            "color: white;"
-            "padding: 20px;"
-            "border-radius: 10px;"
-            "font-weight: bold;"
-        )
+        self.label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                background: #333333;
+                color: white;
+                padding: 15px;
+                border-radius: 8px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }
+        """)
         layout.addWidget(self.label)
 
         # -- Feedback log (read-only HTML console) ---------------------------
@@ -244,34 +291,137 @@ class InterfaceNode(Node, QWidget):
         # Qt.NoFocus prevents the log widget from stealing keyboard focus
         # away from the main window, which would break spacebar PTT detection.
         self.log.setFocusPolicy(Qt.NoFocus)
-        self.log.setStyleSheet(
-            "background: #1e1e1e;"
-            "color: #d4d4d4;"
-            "font-family: 'Consolas', 'Monaco', monospace;"
-            "border-radius: 5px;"
-            "padding: 10px;"
-            "font-size: 12px;"
-        )
+        self.log.setStyleSheet("""
+            QTextEdit {
+                background: #252526;
+                border: 1px solid #3e3e42;
+                border-radius: 8px;
+                padding: 12px;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 13px;
+            }
+        """)
         layout.addWidget(self.log)
 
-        # -- Text command input ----------------------------------------------
+        # -- Input Area (Text + Language) -------------------------------------
+        input_layout = QHBoxLayout()
+        input_layout.setSpacing(10)
+
         self.text_input = QLineEdit()
-        self.text_input.setPlaceholderText("Type a command and press Enter...")
-        self.text_input.setStyleSheet("padding: 10px; border-radius: 5px;")
+        self.text_input.setPlaceholderText(_("Type a command and press Enter..."))
+        self.text_input.setStyleSheet("""
+            QLineEdit {
+                background: #333333;
+                border: 1px solid #3e3e42;
+                padding: 12px 15px;
+                border-radius: 8px;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #4FC3F7;
+            }
+        """)
         self.text_input.returnPressed.connect(self._send_text_command)
-        layout.addWidget(self.text_input)
+        input_layout.addWidget(self.text_input)
+
+        # Language selection dropdown.
+        # Qt stylesheets reference image assets through 'url(<path>)', so we
+        # materialise the arrow glyph as a tiny on-disk SVG. The file is
+        # created with delete=False here and removed in closeEvent() to avoid
+        # leaving stale files behind in $TMP after each run.
+        svg_content = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6" '
+            'viewBox="0 0 10 6">'
+            '<path d="M0 0 L5 6 L10 0 Z" fill="#d4d4d4"/></svg>'
+        )
+        temp_svg = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".svg", mode='w'
+        )
+        temp_svg.write(svg_content)
+        temp_svg.close()
+        self._svg_arrow_path: str = temp_svg.name
+        svg_path = self._svg_arrow_path
+
+        # 2. Configuración del ComboBox
+        self.language_selector = QComboBox()
+        self.language_selector.addItems(["EN", "ES"])
+        self.language_selector.setFixedSize(65, 45)
+        self.language_selector.setCursor(Qt.PointingHandCursor)
+        self.language_selector.setFocusPolicy(Qt.NoFocus)   
+
+        # 3. Aplicar estilo apuntando al archivo físico temporal.
+        #
+        # 'combobox-popup: 0;' is the key line for the dropdown direction:
+        # by default Qt uses the "popup" style where the popup is centered
+        # over the combobox (the selected item lines up under the cursor).
+        # Setting it to 0 switches to a list-view popup that always opens
+        # BELOW the box, matching the conventional desktop dropdown behaviour.
+        #
+        # The QComboBox QAbstractItemView block themes that popup list so it
+        # picks up the same dark palette as the rest of the HMI; without it,
+        # the popup would fall back to the platform default (often a bright
+        # white menu that clashes with the dark theme).
+        self.language_selector.setStyleSheet(f"""
+            QComboBox {{
+                background: #333333;
+                border: 1px solid #3e3e42;
+                border-radius: 8px;
+                padding-left: 10px;
+                color: #d4d4d4;
+                font-weight: bold;
+                combobox-popup: 0;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 20px;
+                border: none;
+            }}
+            QComboBox::down-arrow {{
+                image: url("{svg_path.replace(os.sep, '/')}");
+                width: 10px;
+                height: 6px;
+            }}
+            QComboBox::down-arrow:on {{
+                image: url("{svg_path.replace(os.sep, '/')}");
+                transform: rotate(180deg);
+                width: 10px;
+                height: 6px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: #333333;
+                color: #d4d4d4;
+                border: 1px solid #3e3e42;
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: #4FC3F7;
+                selection-color: #1e1e1e;
+                outline: 0;
+            }}
+        """)
+        
+        self.language_selector.currentIndexChanged.connect(self._update_language)
+        self.language_selector.setFocusPolicy(Qt.NoFocus)
+        input_layout.addWidget(self.language_selector)
+
+        layout.addLayout(input_layout)
 
         # -- Emergency Stop Button -------------------------------------------
-        self.emergency_btn = QPushButton("EMERGENCY STOP (Ctrl+E)")
-        self.emergency_btn.setStyleSheet(
-            "QPushButton {"
-            "  font-size: 13px; background: #D32F2F; color: white;"
-            "  padding: 10px; border-radius: 6px; font-weight: bold;"
-            "  letter-spacing: 1px; min-height: 40px;"
-            "}"
-            "QPushButton:hover { background: #B71C1C; }"
-            "QPushButton:pressed { background: #FF5252; }"
-        )
+        self.emergency_btn = QPushButton(_("EMERGENCY STOP (Ctrl+E)"))
+        self.emergency_btn.setCursor(Qt.PointingHandCursor)
+        self.emergency_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 14px;
+                background: #D32F2F;
+                color: white;
+                padding: 15px;
+                border-radius: 8px;
+                font-weight: bold;
+                letter-spacing: 1px;
+            }
+            QPushButton:hover { background: #B71C1C; }
+            QPushButton:pressed { background: #FF5252; }
+        """)
         self.emergency_btn.clicked.connect(self._emergency_stop)
         layout.addWidget(self.emergency_btn)
 
@@ -286,6 +436,54 @@ class InterfaceNode(Node, QWidget):
         self.setLayout(layout)
         self.setFocus()
 
+
+    # --------------------------------------------------------------------------
+    # LANGUAGE SELECTION
+    # --------------------------------------------------------------------------
+    def _update_language(self, index: int) -> None:
+        """
+        Switches the HMI language and notifies the agent process.
+
+        Updates:
+            - 'stt_language'      : Google STT request locale.
+            - The active gettext catalog (via 'i18n.set_language').
+            - Static widget labels that were instantiated before the switch.
+            - '/language_changed' ROS topic so 'agent_logic' updates its
+              translator too (the two processes don't share memory).
+
+        Args:
+            index: Selected index in the language dropdown.
+                   0 -> English, 1 -> Spanish.
+        """
+        # 1. Map dropdown index to ISO codes for STT and gettext
+        if index == 0:
+            self.stt_language = "en-US"
+            lang_code = "en"
+        elif index == 1:
+            self.stt_language = "es-ES"
+            lang_code = "es"
+        else:
+            return
+
+        # 2. Activate the new catalog locally. All subsequent '_("...")' calls
+        #    in this process resolve through the freshly loaded translator.
+        set_language(lang_code)
+
+        # 3. Refresh static labels that were built with the previous catalog.
+        #    Dynamic strings (the log entries, the recording label) are
+        #    retranslated naturally the next time they are produced.
+        self.label.setText(_("HOLD [SPACE] TO SPEAK"))
+        self.text_input.setPlaceholderText(_("Type a command and press Enter..."))
+        self.emergency_btn.setText(_("EMERGENCY STOP (Ctrl+E)"))
+
+        # 4. Broadcast the change to agent_logic (separate process).
+        msg = String()
+        msg.data = lang_code
+        self.pub_language.publish(msg)
+
+        # 5. Confirm in the log using the now-active catalog.
+        self.add_log(_("[SYSTEM] Language changed."), "#4FC3F7")
+
     # --------------------------------------------------------------------------
     # WINDOW CLOSE EVENT
     # --------------------------------------------------------------------------
@@ -298,7 +496,7 @@ class InterfaceNode(Node, QWidget):
         before the UI terminates.
         """
         self.add_log(
-            "[SYSTEM] Shutting down entire LARIC system...", "#FF4444"
+            (_("[SYSTEM] Shutting down entire LARIC system...")), "#FF4444"
         )
         
         try:
@@ -309,10 +507,21 @@ class InterfaceNode(Node, QWidget):
                     ["bash", SHUTDOWN_SCRIPT_PATH], start_new_session=True
                 )
             else:
-                print(f"DEBUG: Script not found at {SHUTDOWN_SCRIPT_PATH}")
-                self.add_log("[ERROR] Shutdown script not found.", "red")
+                # -----------------------------------------------------------------
+                # print(f"\n[DEBUG interface]: Script not found at {SHUTDOWN_SCRIPT_PATH}")
+                # -------------------------------------------------------------
+                self.add_log((_("[ERROR] Shutdown script not found.")), "red")
         except Exception as e:
             print(f"Error launching shutdown script: {e}")
+
+        # Clean up the temporary SVG arrow file created in _init_ui. Wrapped in
+        # try/except because cleanup must never block window closure.
+        try:
+            if getattr(self, "_svg_arrow_path", None) and \
+               os.path.exists(self._svg_arrow_path):
+                os.unlink(self._svg_arrow_path)
+        except Exception:
+            pass
 
         # Accept the event to allow the window to close visually
         event.accept()
@@ -365,7 +574,7 @@ class InterfaceNode(Node, QWidget):
             return
 
         # 1. Log the command locally before publishing
-        self.add_log(f"[USER - TEXT]: {text}", "#8BC34A")
+        self.add_log(_("[USER - TEXT]: {}").format(text), "#8BC34A")
 
         # 2. Publish to the agent's input topic
         msg = String()
@@ -401,7 +610,7 @@ class InterfaceNode(Node, QWidget):
         self.pub_emergency_stop.publish(flag)
 
         # Step 3: Inform the operator
-        self.add_log("[EMERGENCY STOP] Robot halted by user.", "#FF4444")
+        self.add_log(_("[EMERGENCY STOP] Robot halted by user."), "#FF4444")
         
         # Return focus to main window so PTT continues to work
         self.setFocus()
@@ -512,15 +721,19 @@ class InterfaceNode(Node, QWidget):
         self.is_recording = True
         self.audio_queue.queue.clear()
 
-        # 2. Update the status label to the active-recording style
-        self.label.setText("[RECORDING IN PROGRESS...]")
+        # 2. Update the status label to the active-recording style.
+        #    padding/border-radius match _init_ui so the label keeps a constant
+        #    geometry across idle/recording/processing states (otherwise the
+        #    surrounding layout would visibly jitter on every PTT cycle).
+        self.label.setText(_("[RECORDING IN PROGRESS...]"))
         self.label.setStyleSheet(
             "font-size: 14px;"
             "background: #4CAF50;"
             "color: white;"
-            "padding: 20px;"
-            "border-radius: 10px;"
+            "padding: 15px;"
+            "border-radius: 8px;"
             "font-weight: bold;"
+            "letter-spacing: 1px;"
         )
 
         # 3. Open the sounddevice input stream.
@@ -535,7 +748,7 @@ class InterfaceNode(Node, QWidget):
                 )
                 self.stream.start()
         except Exception as exc:
-            self.add_log(f"[HARDWARE ERROR] Microphone: {exc}", "red")
+            self.add_log(_("[HARDWARE ERROR] Microphone: {}").format(exc), "red")
             self.is_recording = False
             self._reset_ui()
 
@@ -589,15 +802,17 @@ class InterfaceNode(Node, QWidget):
         except Exception:
             pass  # Stream may already be in an error state; proceed regardless
 
-        # 3. Update UI to the processing state
-        self.label.setText("[PROCESSING AUDIO...]")
+        # 3. Update UI to the processing state (same geometry as idle/recording
+        #    so the label does not resize while STT is in flight).
+        self.label.setText(_("[PROCESSING AUDIO...]"))
         self.label.setStyleSheet(
             "font-size: 14px;"
             "background: #FFC107;"
             "color: black;"
-            "padding: 20px;"
-            "border-radius: 10px;"
+            "padding: 15px;"
+            "border-radius: 8px;"
             "font-weight: bold;"
+            "letter-spacing: 1px;"
         )
 
         # 4. Offload STT work to a background thread.
@@ -631,7 +846,7 @@ class InterfaceNode(Node, QWidget):
 
             if not chunks:
                 self.add_log(
-                    "[WARNING] Audio buffer is empty. Nothing to transcribe.", 
+                    _("[WARNING] Audio buffer is empty. Nothing to transcribe."), 
                     "orange"
                 )
                 return
@@ -645,8 +860,8 @@ class InterfaceNode(Node, QWidget):
             duration_s = len(full_audio) / SAMPLE_RATE
             if duration_s < MIN_AUDIO_DURATION_S:
                 self.add_log(
-                    f"[WARNING] Recording too short ({duration_s:.2f}s &lt; "
-                    f"{MIN_AUDIO_DURATION_S}s). Discarded.",
+                    _("[WARNING] Recording too short ({:.2f}s &lt; {:.2f}s). Discarded.")
+                    .format(duration_s, MIN_AUDIO_DURATION_S),
                     "orange",
                 )
                 return
@@ -668,10 +883,10 @@ class InterfaceNode(Node, QWidget):
             #    significantly better accuracy than the default English model
             #    for this application's target user base.
             text = self.recognizer.recognize_google(
-                audio_data, language="es-ES"
+                audio_data, language=self.stt_language
             )
 
-            self.add_log(f"[USER - VOICE]: {text}", "#8BC34A")
+            self.add_log(_("[USER - VOICE]: {}").format(text), "#8BC34A")
 
             # 6. Publish the transcription to the agent's input topic
             msg = String()
@@ -681,17 +896,18 @@ class InterfaceNode(Node, QWidget):
         except sr.UnknownValueError:
             # Raised when the audio contains only silence or is unintelligible.
             self.add_log(
-                "[WARNING] No speech detected "
-                "(silence or unintelligible audio)."
-                , "orange")
+                _("[WARNING] No speech detected ")
+                + _("(silence or unintelligible audio)."),
+                "orange"
+            )
 
         except sr.RequestError as exc:
             # Raised when the Google STT API is unreachable or returns an error.
-            self.add_log(f"[ERROR] Google STT API request failed: {exc}", "red")
+            self.add_log(_("[ERROR] Google STT API request failed: {}").format(exc), "red")
 
         except Exception as exc:
             self.add_log(
-                f"[ERROR] Unexpected error during audio processing: {exc}", 
+                _("[ERROR] Unexpected error during audio processing: {}").format(exc),
                 "red"
             )
 
@@ -708,15 +924,21 @@ class InterfaceNode(Node, QWidget):
     def _reset_ui(self) -> None:
         """
         Resets the status label to the idle (ready-to-record) state.
+
+        The padding / border-radius values mirror those used in '_init_ui',
+        '_start_recording', and '_stop_recording' so the label's footprint is
+        identical across all states. Diverging here causes a visible "jump"
+        in the surrounding layout the first time recording completes.
         """
-        self.label.setText("HOLD [SPACE] TO SPEAK")
+        self.label.setText(_("HOLD [SPACE] TO SPEAK"))
         self.label.setStyleSheet(
             "font-size: 14px;"
             "background: #333333;"
             "color: white;"
-            "padding: 20px;"
-            "border-radius: 10px;"
+            "padding: 15px;"
+            "border-radius: 8px;"
             "font-weight: bold;"
+            "letter-spacing: 1px;"
         )
 
 
@@ -754,3 +976,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
