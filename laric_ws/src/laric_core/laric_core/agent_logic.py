@@ -466,9 +466,8 @@ class SpinTool(BaseTool):
                 else:
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Rotation could not be completed."
-                        "Try issuing a navigate to location command first "
-                        "to warm up the system, then retry. ")
+                        _("[LARIC]: Rotation could not be completed. "
+                          "Obstacle detected.")
                     )
                 return result_container["text"]
             else:
@@ -718,9 +717,8 @@ class MoveTool(BaseTool):
                 else:
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Movement could not be completed." 
-                        "Try issuing a navigate to location command first "
-                        "to warm up the system, then retry. ")
+                        _("[LARIC]: Movement could not be completed. "
+                          "Obstacle detected.")
                     )
                 return result_container["text"]
             else:
@@ -1838,4 +1836,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

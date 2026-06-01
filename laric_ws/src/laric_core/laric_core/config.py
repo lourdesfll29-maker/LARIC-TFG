@@ -26,7 +26,7 @@ is_from_lab: bool = True
 # True when the agent talks to the real Husarion ROSbot at the UPV lab.
 # False when running against the Gazebo simulation.
 # Distinct from 'from_lab' (which is about LLM endpoint, not robot environment).
-is_real_robot: bool = True
+is_real_robot: bool = False
 
 
 # ==============================================================================

@@ -37,7 +37,8 @@ echo "--- Starting LARIC Simulation Environment ---"
 #    /clock and the robot's TF tree before Nav2 can start.
 echo "[1/4] Starting Gazebo (World)..."
 bash -c "source $VENV_PATH && ros2 launch turtlebot3_gazebo \
-    turtlebot3_house.launch.py > $LOG_DIR/gazebo.log 2>&1" &
+    turtlebot3_house.launch.py x_pose:=-2.0 y_pose:=-3.0 \
+    > $LOG_DIR/gazebo.log 2>&1" &
 
 sleep 10
 
