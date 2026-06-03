@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 # LARIC System - Real Robot Startup Script
 # Copyright (c) 2026 LARIC. All rights reserved.
 #
@@ -16,7 +15,7 @@
 # ~/rosbot-autonomy on the robot's onboard computer (see Marcos's setup
 # documentation). The laptop is a ROS 2 client only.
 #
-# Visualization is provided by Foxglove at http://172.18.191.80:8080/ui
+# Visualization is provided by Foxglove at http://192.168.1.103:8080/ui
 # (served by the husarion-webui snap on the robot). RViz is intentionally
 # NOT launched here.
 #
@@ -28,7 +27,7 @@ set -e
 WS_PATH="$HOME/laric_ws"
 VENV_PATH="$WS_PATH/laric_env/bin/activate"
 LOG_DIR="$WS_PATH/laric_logs/$(date +'%Y%m%d_%H%M%S')_real"
-ROBOT_IP="172.18.191.80"
+ROBOT_IP="192.168.1.103"
 
 # ROS 2 network — must match the robot. Marcos's setup uses domain 0.
 export ROS_DOMAIN_ID=0
@@ -38,13 +37,13 @@ export ROS_LOCALHOST_ONLY=0
 mkdir -p "$LOG_DIR"
 
 echo "--- Starting LARIC on Real Robot ---"
-echo "Expecting ROSbot at $ROBOT_IP (UPV-PSK), ROS_DOMAIN_ID=$ROS_DOMAIN_ID."
+echo "Expecting ROSbot at $ROBOT_IP (linksys-ai2), ROS_DOMAIN_ID=$ROS_DOMAIN_ID."
 
 # Sanity check — is the robot on the network?
 if ping -c 1 -W 2 "$ROBOT_IP" > /dev/null 2>&1; then
     echo "Robot reachable."
 else
-    echo "WARNING: $ROBOT_IP not reachable. Verify the laptop is on UPV-PSK"
+    echo "WARNING: $ROBOT_IP not reachable. Verify the laptop has connection to linksys-ai2"
     echo "and that someone has run 'just start-navigation' on the robot."
 fi
 
