@@ -1833,6 +1833,5 @@ def main() -> None:
             _("[SYSTEM]: Shutting down LARIC Agent...")
         )
 
-
 if __name__ == "__main__":
     main()
