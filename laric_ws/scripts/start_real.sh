@@ -31,8 +31,9 @@ ROBOT_IP="192.168.1.103"
 
 # ROS 2 network — must match the robot. Marcos's setup uses domain 0.
 export ROS_DOMAIN_ID=0
-# Allow cross-machine DDS discovery (default is 0; explicit for clarity).
-export ROS_LOCALHOST_ONLY=0
+# Allow DDS discovery across machines on the same subnet (the laptop and
+# the ROSbot live on the same LAN).
+export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 
 mkdir -p "$LOG_DIR"
 
