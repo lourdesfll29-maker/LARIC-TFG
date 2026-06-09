@@ -87,25 +87,21 @@ KNOWN_LOCATIONS_SIM: dict = {
     "bottom_right_room": {"x": -6.34, "y":  0.18, "yaw": 0.0},
 }
 
-# --- Real robot: UPV ai2 lab (recorded 2026-05-29) ---
+# --- Real robot: UPV ai2 lab + 3rd-floor corridors (clicked 2026-06-09) ---
 KNOWN_LOCATIONS_REAL: dict = {
-    "sink_corner":       {"x": -5.78, "y": -3.29, "yaw": 0.0},
-    "cable_room":        {"x": -4.31, "y": -1.96, "yaw": 0.0},
-    "lab_entrance":      {"x": -3.02, "y": -6.14, "yaw": 0.0},
-    "marcos_desk":       {"x": -2.92, "y": -0.08, "yaw": 0.0},
-    "rosa_maria_desk":   {"x": -1.10, "y":  2.73, "yaw": 0.0},
-    "marc_desk":         {"x":  3.79, "y": -0.22, "yaw": 0.0},
-    "lourdes_desk":      {"x":  2.64, "y": -1.99, "yaw": 0.0},
-    "printer_room_door": {"x":  2.48, "y": -5.82, "yaw": 0.0},
-    "andrea_desk":       {"x":  6.72, "y": -2.83, "yaw": 0.0},
-    "storage_zone":      {"x":  5.58, "y": -7.93, "yaw": 0.0},
-    "aisle_1":           {"x": -0.30, "y": -0.05, "yaw": 0.0},
-    "aisle_2":           {"x":  3.20, "y": -1.95, "yaw": 0.0},
-    "aisle_3":           {"x":  6.08, "y": -4.57, "yaw": 0.0},
-    "lab_center":        {"x": -1.01, "y": -3.41, "yaw": 0.0},
-    "window_1":          {"x":  2.23, "y":  2.99, "yaw": 0.0},
-    "window_2":          {"x":  5.22, "y":  0.91, "yaw": 0.0},
-    "window_3":          {"x":  8.12, "y": -1.90, "yaw": 0.0},
+    "ai2_lab_entrance":      {"x":  2.85, "y":  -7.05, "yaw": 0.0},
+    "trash_bins":            {"x":  7.98, "y": -14.01, "yaw": 0.0},
+    "healthy_plant":         {"x":  4.63, "y": -13.71, "yaw": 0.0},
+    "wilting_plant":         {"x": 11.43, "y": -14.09, "yaw": 0.0},
+    "wide_area_access_1":    {"x":  5.16, "y": -10.31, "yaw": 0.0},
+    "wide_area_access_2":    {"x": 10.46, "y": -11.05, "yaw": 0.0},
+    "networks_lab_3e1":      {"x": 14.57, "y": -10.33, "yaw": 0.0},
+    "corridor_3n_entrance":  {"x": -1.69, "y":  -9.36, "yaw": 0.0},
+    "restrooms_entrance":    {"x":  3.94, "y": -22.55, "yaw": 0.0},
+    "hallway_1_entrance":    {"x": -1.73, "y": -22.19, "yaw": 0.0},
+    "hallway_2_entrance":    {"x": 16.12, "y": -23.46, "yaw": 0.0},
+    "admin_office_entrance": {"x": 17.73, "y": -10.89, "yaw": 0.0},
+    "coat_rack":             {"x":  5.25, "y":  -4.46, "yaw": 0.0},
 }
 
 # Active map: picked based on environment flag above.
