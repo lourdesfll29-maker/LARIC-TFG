@@ -15,7 +15,7 @@
 # ~/rosbot-autonomy on the robot's onboard computer (see Marcos's setup
 # documentation). The laptop is a ROS 2 client only.
 #
-# Visualization is provided by Foxglove at http://192.168.1.103:8080/ui
+# Visualization is provided by Foxglove at http://192.168.1.46:8080/ui
 # (served by the husarion-webui snap on the robot). RViz is intentionally
 # NOT launched here.
 #
@@ -27,7 +27,7 @@ set -e
 WS_PATH="$HOME/laric_ws"
 VENV_PATH="$WS_PATH/laric_env/bin/activate"
 LOG_DIR="$WS_PATH/laric_logs/$(date +'%Y%m%d_%H%M%S')_real"
-ROBOT_IP="192.168.1.103"
+ROBOT_IP="192.168.1.46"
 
 # ROS 2 network — must match the robot. Marcos's setup uses domain 0.
 export ROS_DOMAIN_ID=0
