@@ -38,13 +38,13 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 mkdir -p "$LOG_DIR"
 
 echo "--- Starting LARIC on Real Robot ---"
-echo "Expecting ROSbot at $ROBOT_IP (linksys-ai2), ROS_DOMAIN_ID=$ROS_DOMAIN_ID."
+echo "Expecting ROSbot at $ROBOT_IP (MERCUSYS_ai2), ROS_DOMAIN_ID=$ROS_DOMAIN_ID."
 
 # Sanity check — is the robot on the network?
 if ping -c 1 -W 2 "$ROBOT_IP" > /dev/null 2>&1; then
     echo "Robot reachable."
 else
-    echo "WARNING: $ROBOT_IP not reachable. Verify the laptop has connection to linksys-ai2"
+    echo "WARNING: $ROBOT_IP not reachable. Verify the laptop has connection to MERCUSYS_ai2"
     echo "and that someone has run 'just start-navigation' on the robot."
 fi
 
