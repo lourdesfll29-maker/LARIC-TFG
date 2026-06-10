@@ -37,6 +37,41 @@ import threading
 import time
 from typing import Any, List, Optional, Type, Union
 
+# ------------------------------------------------------------------------------
+# Noise suppression — must run BEFORE third-party imports.
+#
+# Three sources of harmless-but-noisy output pollute the agent terminal:
+#   1. pydub (pulled in transitively): 'SyntaxWarning: invalid escape sequence'
+#      on Python 3.12 because its utils.py uses non-raw regex strings. Emitted
+#      at module-compile time, so the filter MUST be installed before pydub
+#      is imported by any other library.
+#   2. langgraph: 'LangChainPendingDeprecationWarning' about the default value
+#      of 'allowed_objects' changing in a future release.
+#   3. rai: WARNING-level 'rai_interfaces is not installed' messages on the
+#      root logger. We don't use HRIMessage / ManipulatorMoveTo, so these are
+#      pure noise. Dropped via a logging.Filter so unrelated WARNINGs from the
+#      root logger still get through.
+# ------------------------------------------------------------------------------
+import logging
+import warnings
+
+warnings.filterwarnings("ignore", category=SyntaxWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+
+
+class _RAIInterfacesNoise(logging.Filter):
+    """Drops the 'rai_interfaces is not installed' WARNINGs from the root logger."""
+
+    _NEEDLES = ("rai_interfaces is not installed", "based on rai_interfaces")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(needle in msg for needle in self._NEEDLES)
+
+
+logging.getLogger().addFilter(_RAIInterfacesNoise())
+
 from pydantic import BaseModel, Field
 
 # -- ROS 2 -----------------------------------------------------------------------
@@ -46,11 +81,13 @@ from action_msgs.msg import GoalStatus
 from nav2_msgs.action import BackUp, DriveOnHeading, Spin
 
 # -- LangChain -------------------------------------------------------------------
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain.tools import BaseTool
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
+    from langchain.tools import BaseTool
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_groq import ChatGroq
+    from langchain_ollama import ChatOllama
 
 # -- RAI -------------------------------------------------------------------------
 from rai.communication.ros2 import ROS2Context, ROS2Message
@@ -1832,6 +1869,7 @@ def main() -> None:
             ros_connector,
             _("[SYSTEM]: Shutting down LARIC Agent...")
         )
+
 
 if __name__ == "__main__":
     main()
