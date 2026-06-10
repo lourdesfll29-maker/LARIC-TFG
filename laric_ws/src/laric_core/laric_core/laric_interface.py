@@ -37,6 +37,14 @@ import subprocess
 from contextlib import contextmanager
 from typing import Generator
 
+# Force Qt to use the X11 (xcb) backend even on Wayland sessions (Ubuntu 24+).
+# Under Wayland the compositor (Mutter) ignores 'Qt.WindowStaysOnTopHint',
+# silently drops the absolute coordinates passed to 'setGeometry(...)', and
+# wraps Qt5 apps with a white client-side decoration because PyQt5 does not
+# advertise CSD support. XWayland reproduces the Ubuntu 22 / X11 behaviour
+# exactly. This MUST be set before any PyQt5 import.
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 import numpy as np
 import scipy.io.wavfile as wav
 import sounddevice as sd
@@ -962,6 +970,12 @@ def main() -> None:
     # 3. Instantiate the combined ROS 2 node / Qt widget
     node = InterfaceNode()
     node.show()
+    # Belt-and-suspenders: raise above sibling windows and grab keyboard focus
+    # on launch. Under XWayland these calls are usually enough; under native
+    # Wayland they are advisory and the compositor may still ignore them
+    # (which is why we force xcb at import time).
+    node.raise_()
+    node.activateWindow()
 
     # 4. Enter the Qt event loop.
     #    This call blocks until the user closes the window.
@@ -976,4 +990,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
