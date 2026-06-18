@@ -5,8 +5,9 @@ Copyright (c) 2026 LARIC. All rights reserved.
 Main module implementing ROS 2 robot control via a LangChain tool-calling agent.
 All motion is delegated to Nav2 Behavior Plugins (/spin, /drive_on_heading,
 /backup) or the Nav2 NavigateToPose action server. The robot must always be
-localised via the '2D Pose Estimate' tool in RViz before any motion command is
-accepted.
+localised before any motion command is accepted. Localisation is signalled by
+a pose published on /initialpose: via RViz's '2D Pose Estimate' in simulation,
+and via the Foxglove UI on the real Husarion ROSbot.
 
 ROS 2 topics consumed:
   /from_human         (std_msgs/String)  - user commands routed to the LLM.
@@ -38,19 +39,10 @@ import time
 from typing import Any, List, Optional, Type, Union
 
 # ------------------------------------------------------------------------------
-# Noise suppression — must run BEFORE third-party imports.
-#
-# Three sources of harmless-but-noisy output pollute the agent terminal:
-#   1. pydub (pulled in transitively): 'SyntaxWarning: invalid escape sequence'
-#      on Python 3.12 because its utils.py uses non-raw regex strings. Emitted
-#      at module-compile time, so the filter MUST be installed before pydub
-#      is imported by any other library.
-#   2. langgraph: 'LangChainPendingDeprecationWarning' about the default value
-#      of 'allowed_objects' changing in a future release.
-#   3. rai: WARNING-level 'rai_interfaces is not installed' messages on the
-#      root logger. We don't use HRIMessage / ManipulatorMoveTo, so these are
-#      pure noise. Dropped via a logging.Filter so unrelated WARNINGs from the
-#      root logger still get through.
+# Noise suppression — must run BEFORE third-party imports. Silences three
+# harmless sources: pydub's SyntaxWarning (Py3.12 non-raw regex), langgraph's
+# PendingDeprecationWarning, and rai's 'rai_interfaces is not installed'
+# WARNINGs (dropped via the logging.Filter below).
 # ------------------------------------------------------------------------------
 import logging
 import warnings
@@ -61,7 +53,7 @@ warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 
 
 class _RAIInterfacesNoise(logging.Filter):
-    """Drops the 'rai_interfaces is not installed' WARNINGs from the root logger."""
+    """Drops the 'rai_interfaces is not installed' root-logger WARNINGs."""
 
     _NEEDLES = ("rai_interfaces is not installed", "based on rai_interfaces")
 
@@ -74,13 +66,13 @@ logging.getLogger().addFilter(_RAIInterfacesNoise())
 
 from pydantic import BaseModel, Field
 
-# -- ROS 2 -----------------------------------------------------------------------
+# -- ROS 2 ---------------------------------------------------------------------
 from action_msgs.msg import GoalStatus
 
-# -- Nav2 action definitions -----------------------------------------------------
+# -- Nav2 action definitions ---------------------------------------------------
 from nav2_msgs.action import BackUp, DriveOnHeading, Spin
 
-# -- LangChain -------------------------------------------------------------------
+# -- LangChain -----------------------------------------------------------------
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     from langchain.agents import AgentExecutor, create_tool_calling_agent
@@ -89,7 +81,7 @@ with warnings.catch_warnings():
     from langchain_groq import ChatGroq
     from langchain_ollama import ChatOllama
 
-# -- RAI -------------------------------------------------------------------------
+# -- RAI -----------------------------------------------------------------------
 from rai.communication.ros2 import ROS2Context, ROS2Message
 from rai.communication.ros2.connectors.ros2_connector import ROS2Connector
 from rai.tools.ros2.navigation.nav2 import (
@@ -99,7 +91,7 @@ from rai.tools.ros2.navigation.nav2 import (
     NavigateToPoseTool
 )
 
-# -- Project configuration & i18n ------------------------------------------------
+# -- Project configuration & i18n ----------------------------------------------
 from config import (
     GROQ_API_KEY,
     GROQ_MODEL_70B,
@@ -108,6 +100,17 @@ from config import (
     SYSTEM_PROMPT,
     URL,
     is_from_lab,
+    is_real_robot,
+    SPEED_NORMAL_FWD,
+    SPEED_NORMAL_BACK,
+    SPIN_SPEED_RAD_S,
+    SPIN_ALLOWANCE_BUFFER_S,
+    SPIN_ALLOWANCE_MIN_S,
+    MOVE_ALLOWANCE_BUFFER_S,
+    POLL_INTERVAL_S,
+    NAV_POLL_INTERVAL_S,
+    NAV_TIMEOUT_S,
+    INITIALPOSE_GRACE_S,
 )
 from i18n import _, set_language
 
@@ -308,11 +311,6 @@ class SpinTool(BaseTool):
     """
     Rotates the robot in place using the Nav2 '/spin' Behavior Plugin.
 
-    All rotation is handled by the Nav2 action server, which ensures the
-    robot's pose estimate is maintained throughout the manoeuvre. Direct
-    '/cmd_vel' publishing is intentionally avoided to keep Nav2 costmaps
-    consistent.
-
     Attributes:
         name: LangChain tool identifier. Must match the name used in
             'SYSTEM_PROMPT'.
@@ -322,17 +320,17 @@ class SpinTool(BaseTool):
         connector: Active 'ROS2Connector' instance for action I/O.
         abort_event: Shared 'threading.Event'; set by 'StopTool' to cancel
             an in-flight motion.
-        motion_lock: Shared 'threading.Lock'; acquired non-blockingly at
+        motion_lock: Shared 'threading.RLock'; acquired non-blockingly at
             entry to guarantee at most one motion runs at a time.
         localised_event: Shared 'threading.Event'; must be set (robot
-            localised via RViz '2D Pose Estimate') before any motion runs.
+            localised) before any motion runs.
     """
 
     name: str = "spin_robot"
     description: str = (
         "Rotates the robot in place by a specific angle in degrees using Nav2. "
         "Use for ALL rotation commands ('gira 90 grados', etc.). "
-        "Nav2 MUST be localised via '2D Pose Estimate' in RViz before calling. "
+        "Nav2 MUST be localised before calling. "
         "Do NOT use for forward/backward movement - use move_robot for that."
     )
     args_schema: Type[BaseModel] = SpinInput
@@ -369,17 +367,16 @@ class SpinTool(BaseTool):
         self.motion_lock     = motion_lock
         self.localised_event = localised_event
 
-    def _run(self, angle: float) -> str:
+    def _run(self, angle: float, standalone: bool = True) -> str:
         """
         Executes a Nav2-controlled in-place rotation.
-
-        Sends a 'Spin.Goal' to the Nav2'/spin' action server and blocks
-        the calling thread until the action completes, times out, or is
-        aborted via 'abort_flag'.
 
         Args:
             angle: Target rotation in degrees. Positive = CCW (left);
                 negative = CW (right).
+            standalone: True for a normal single command. False when invoked by
+                SequenceTool, which owns motion_lock and the abort_event reset
+                for the whole sequence.
 
         Returns:
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
@@ -389,8 +386,8 @@ class SpinTool(BaseTool):
         if not self.localised_event.is_set():
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                  "Estimate' in RViz, then retry.")
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
@@ -400,8 +397,8 @@ class SpinTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
-                  "Please wait for it to complete or use 'stop_robot' to abort it "
-                  "before issuing a new command.")
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -409,19 +406,18 @@ class SpinTool(BaseTool):
             )
 
         try:
-            self.abort_event.clear()
+            if standalone:
+                self.abort_event.clear()
 
             # 1. Announce the action
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Starting rotation of {angle}°...").format(angle=angle)
+                _("[LARIC]: Starting rotation of {angle}°...")
+                .format(angle=angle)
             )
 
             # 2. Build the Nav2 Spin goal
             target_yaw_rad = math.radians(angle)
-            # time_allowance caps how long Nav2 may attempt the spin.
-            # Computed from the expected kinematic duration plus a safety buffer
-            # to avoid false timeouts on large rotations (e.g., 360°).
             timeout_float = _compute_spin_allowance(target_yaw_rad)
 
             goal_dict = {
@@ -433,19 +429,15 @@ class SpinTool(BaseTool):
             }
 
             # 3. Set up threading synchronisation primitives
-            # threading.Event provides atomic set/wait semantics without an 
-            # explicit lock, making it preferable to a raw boolean flag for 
-            # cross-thread signalling.
             action_done      = threading.Event()
             result_container = {"text": ""}
 
-            # TODO: Solve ACTION FAILED issue
             def _on_done(result: Spin.Result) -> None:
                 """
                 Signals completion when the Nav2 action server responds.
                 """
                 status = result.result().status
-                if status == GoalStatus.STATUS_SUCCEEDED:   # 4
+                if status == GoalStatus.STATUS_SUCCEEDED:
                     result_container["text"] = (
                         f"SUCCESS. Rotation of {angle}° completed. "
                         "DO NOT CALL ANY OTHER TOOLS."
@@ -459,7 +451,7 @@ class SpinTool(BaseTool):
 
             def _on_feedback(feedback: Any) -> None:
                 """
-                Incremental feedback handler (unused; reserved for future logging).
+                Incremental feedback handler (currently unused).
                 """
                 pass
 
@@ -475,11 +467,11 @@ class SpinTool(BaseTool):
             # 5. Poll for completion, abort signal, or timeout
             timeout       = timeout_float
             elapsed       = 0.0
-            poll_interval = 0.2  # seconds; balances responsiveness vs CPU load
+            poll_interval = POLL_INTERVAL_S
 
             while not action_done.is_set() and elapsed < timeout:
                 if self.abort_event.is_set():
-                    # StopTool has set the flag; cancel the Nav2 goal immediately.
+                    # StopTool sets the flag; cancels the Nav2 goal inmediately.
                     self.connector.terminate_action(handle)
                     _publish_feedback(
                         self.connector,
@@ -524,8 +516,8 @@ class SpinTool(BaseTool):
             # unconditionally by the 'finally' below.
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                  "Estimate' in RViz, then retry.")
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
             )
             return (
                 f"ERROR: Critical Nav2 exception in SpinTool: {exc}. "
@@ -542,10 +534,6 @@ class MoveTool(BaseTool):
     """
     Moves the robot forward or backward via Nav2 Behavior Plugins.
 
-    Positive distances are handled by the '/drive_on_heading' action server;
-    negative distances use '/backup'. Both keep the robot within the Nav2
-    localisation framework.
-
     Attributes:
         name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
         description: Read by the LLM to decide when to invoke this tool.
@@ -553,7 +541,7 @@ class MoveTool(BaseTool):
         connector: Active 'ROS2Connector' instance.
         abort_event: Shared 'threading.Event'; set by 'StopTool' to cancel
             an in-flight motion.
-        motion_lock: Shared 'threading.Lock'; acquired non-blockingly at
+        motion_lock: Shared 'threading.RLock'; acquired non-blockingly at
             entry to serialise motion commands.
         localised_event: Shared 'threading.Event'; must be set before any
             motion is attempted.
@@ -565,7 +553,7 @@ class MoveTool(BaseTool):
         "using Nav2. "
         "Positive distance = forward (/drive_on_heading). "
         "Negative distance = backward (/backup). "
-        "Nav2 MUST be localised via '2D Pose Estimate' in RViz before calling. "
+        "Nav2 MUST be localised before calling. "
         "Do NOT use for rotations - use spin_robot for that."
     )
     args_schema: Type[BaseModel] = MoveInput
@@ -601,19 +589,18 @@ class MoveTool(BaseTool):
         self.motion_lock     = motion_lock
         self.localised_event = localised_event
 
-    def _run(self, distance: float, speed: float = 0.0) -> str:
+    def _run(self, distance: float, speed: float = 0.0,
+             standalone: bool = True) -> str:
         """
         Executes a Nav2-controlled linear translation.
-
-        Dispatches to '/drive_on_heading' for forward motion and '/backup'
-        for rearward motion. Blocks the calling thread until the action
-        completes, times out, or is aborted.
 
         Args:
             distance: Signed target distance in meters. Positive = forward;
                 negative = backward.
-            speed: Desired speed in m/s. If '0.0', a safe default is applied:
-                0.3 m/s forward, 0.2 m/s backward.
+            speed: Desired speed in m/s. If '0.0', the configured default is
+                applied: SPEED_NORMAL_FWD forward, SPEED_NORMAL_BACK backward.
+            standalone: True for a normal single command. False when invoked by
+                SequenceTool (which owns motion_lock and the abort reset).
 
         Returns:
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
@@ -627,23 +614,21 @@ class MoveTool(BaseTool):
         if not self.localised_event.is_set():
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                  "Estimate' in RViz, then retry.")
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
-        # acquire(blocking=False) returns True iff the lock was free and is now
-        # held by this thread. The 'not' below means: "if we failed to acquire,
-        # another motion is in progress -> reject". Forgetting the 'not' here
-        # would invert the meaning AND leak the lock on the happy path.
+        # Non-blocking acquire: True only if the lock was free. A False result
+        # means another motion is already running, so the command is rejected.
         if not self.motion_lock.acquire(blocking=False):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
-                  "Please wait for it to complete or use 'stop_robot' to abort it "
-                  "before issuing a new command.")
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -657,13 +642,16 @@ class MoveTool(BaseTool):
             direction_label = _("forward") if is_forward else _("backward")
 
             if speed <= 0.0:
-                speed = 0.3 if is_forward else 0.2
+                speed = (SPEED_NORMAL_FWD if is_forward
+                         else SPEED_NORMAL_BACK)
 
-            self.abort_event.clear()
+            if standalone:
+                self.abort_event.clear()
             # 2. Announce action
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Moving {dist:.2f} m {direction} at {speed:.2f} m/s...")
+                _("[LARIC]: Moving {dist:.2f} m {direction} "
+                  "at {speed:.2f} m/s...")
                 .format(dist=dist_abs, direction=direction_label, speed=speed)
             )
 
@@ -689,7 +677,6 @@ class MoveTool(BaseTool):
             action_done      = threading.Event()
             result_container = {"text": ""}
 
-            # TODO: Solve ACTION FAILED issue
             def _on_done(
                     result: Union[DriveOnHeading.Result, BackUp.Result]
             ) -> None:
@@ -697,7 +684,7 @@ class MoveTool(BaseTool):
                 Signals completion when the Nav2 action server responds.
                 """
                 status = result.result().status
-                if status == GoalStatus.STATUS_SUCCEEDED:   # 4
+                if status == GoalStatus.STATUS_SUCCEEDED:
                     result_container["text"] = (
                         f"SUCCESS. Moved {dist_abs:.2f} m {direction_label}. "
                         "DO NOT CALL ANY OTHER TOOLS."
@@ -711,7 +698,7 @@ class MoveTool(BaseTool):
 
             def _on_feedback(feedback: Any) -> None:
                 """
-                Incremental feedback handler (reserved for future use).
+                Incremental feedback handler (currently unused).
                 """
                 pass
 
@@ -727,7 +714,7 @@ class MoveTool(BaseTool):
             # 6. Poll for completion, abort, or timeout
             timeout       = timeout_float
             elapsed       = 0.0
-            poll_interval = 0.2
+            poll_interval = POLL_INTERVAL_S
 
             while not action_done.is_set() and elapsed < timeout:
                 if self.abort_event.is_set():
@@ -772,8 +759,8 @@ class MoveTool(BaseTool):
         except Exception as exc:
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                  "Estimate' in RViz, then retry.")
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
             )
             return (
                 f"ERROR: Critical Nav2 exception in MoveTool: {exc}. "
@@ -790,12 +777,6 @@ class SequenceTool(BaseTool):
     """
     Executes an ordered series of primitive Nav2 movements sequentially.
 
-    This tool exists to work around LangChain's one-tool-per-turn constraint:
-    multi-step commands (e.g., "move forward 2 meters and then turn right 90°")
-    are packaged into a single tool call and executed step-by-step. Each step
-    delegates to the internal '_move_tool' or '_spin_tool' instances, which
-    block until Nav2 confirms completion before the next step begins.
-
     Attributes:
         name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
         description: Read by the LLM to decide when to invoke this tool.
@@ -803,9 +784,9 @@ class SequenceTool(BaseTool):
         connector: Active 'ROS2Connector' instance.
         abort_event: Shared 'threading.Event'; propagated to the sub-tools so
             'StopTool' can halt the active step mid-sequence.
-        motion_lock: Shared 'threading.Lock'; not acquired by this class -
-            the inner '_move_tool' / '_spin_tool' acquire it per step.
-        localised_event: Shared 'threading.Event'; checked by the sub-tools.
+        motion_lock: Shared 'threading.RLock'; acquired once for
+            the whole sequence so no other command can interleave between steps.
+        localised_event: Shared 'threading.Event'; checked once here.
         _spin_tool: Internal 'SpinTool' instance used for spin steps.
         _move_tool: Internal 'MoveTool' instance used for move steps.
     """
@@ -852,7 +833,7 @@ class SequenceTool(BaseTool):
         self.abort_event = abort_event
         self.motion_lock = motion_lock
         self.localised_event = localised_event
-        # Sub-tools share the same connector and state so abort_flag propagates
+        # Sub-tools share the same connector and state so abort_event propagates
         # correctly - stopping mid-sequence halts the active step immediately.
         self._spin_tool = SpinTool(
             connector=connector, 
@@ -871,9 +852,6 @@ class SequenceTool(BaseTool):
         """
         Executes the sequence steps one by one.
 
-        Performs defensive coercion of LangChain's serialised arguments
-        (dicts) to 'SequenceStep' objects before processing.
-
         Args:
             steps: Ordered list of 'SequenceStep' objects or equivalent
                 dicts describing each movement primitive.
@@ -882,86 +860,118 @@ class SequenceTool(BaseTool):
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
             or 'ERROR' (or an error message naming the failed step).
         """
-        # 1. Defensive parsing: LangChain serialises tool arguments as plain
-        # dicts when the schema contains a List of nested models. Coerce them
-        # back to SequenceStep instances before processing.
-        parsed_steps: List[SequenceStep] = [
-            SequenceStep(**s) if isinstance(s, dict) else s for s in steps
-        ]
-
-        _publish_feedback(
-            self.connector,
-            _("[LARIC]: Starting sequence of {n} steps...")
-            .format(n=len(parsed_steps))
-        )
-
-        # 2. Execute each step in order
-        for index, step in enumerate(parsed_steps):
-
-            # Check abort flag before starting the next step
-            if self.abort_event.is_set():
-                _publish_feedback(
-                    self.connector,
-                    _("[LARIC]: Sequence aborted between steps.")
-                )
-                return (
-                        "ACTION ABORTED. Sequence halted by user. "
-                        "DO NOT CALL ANY OTHER TOOLS."
-                )
-
-            unit = _("meters") if step.action.lower() == "move" else _("degrees")
+        # 0. Preconditions, checked once for the whole sequence.
+        if not self.localised_event.is_set():
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Step {i}/{n}: {action} -> {value} {unit}.")
-                .format(
-                    i=index + 1, n=len(parsed_steps),
-                    action=step.action, value=step.value, unit=unit,
-                )
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
+            )
+            return (
+                "ACTION FAILED. The robot is not localised. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+        if not self.motion_lock.acquire(blocking=False):
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command.")
+            )
+            return (
+                "ACTION FAILED. Another action is currently in progress. "
+                "DO NOT CALL ANY OTHER TOOLS."
             )
 
-            # 3. Dispatch to the appropriate primitive tool
-            if step.action.lower() == "move":
-                result = self._move_tool._run(distance=step.value, speed=step.speed)
+        try:
+            self.abort_event.clear()
 
-            elif step.action.lower() == "spin":
-                result = self._spin_tool._run(angle=step.value)
+            # 1. Coerce serialised dicts back to SequenceStep objects.
+            parsed_steps: List[SequenceStep] = [
+                SequenceStep(**s) if isinstance(s, dict) else s for s in steps
+            ]
 
-            else:
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Starting sequence of {n} steps...")
+                .format(n=len(parsed_steps))
+            )
+
+            # 2. Execute each step in order
+            for index, step in enumerate(parsed_steps):
+
+                # Check abort flag before starting the next step
+                if self.abort_event.is_set():
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Sequence aborted between steps.")
+                    )
+                    return (
+                        "ACTION ABORTED. Sequence halted by user. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+
+                unit = (_("meters") if step.action.lower() == "move"
+                        else _("degrees"))
                 _publish_feedback(
                     self.connector,
-                    _("[LARIC]: Error - Unknown action type '{action}' at step "
-                      "{i}. Valid types are 'move' and 'spin'.")
-                    .format(action=step.action, i=index + 1)
-                )
-                return (
-                    f"ERROR: Unknown action type '{step.action}' "
-                    f"at step {index + 1}. Valid types are 'move' and 'spin'. "
-                    "DO NOT CALL ANY OTHER TOOLS."
+                    _("[LARIC]: Step {i}/{n}: {action} -> {value} {unit}.")
+                    .format(
+                        i=index + 1, n=len(parsed_steps),
+                        action=step.action, value=step.value, unit=unit,
+                    )
                 )
 
-            # 4. Propagate errors upward; do not continue a failed sequence
-            if "ERROR" in result or "ABORTED" in result:
-                _publish_feedback(
-                    self.connector,
-                    _("[LARIC]: Sequence interrupted at step {i}.")
-                    .format(i=index + 1)
-                )
-                return (
-                    f"Sequence halted at step {index + 1}: {result}. "
-                    "DO NOT CALL ANY OTHER TOOLS."
-                )
+                # 3. Dispatch (standalone=False: this class owns the lock and
+                #    the abort reset).
+                if step.action.lower() == "move":
+                    result = self._move_tool._run(
+                        distance=step.value, speed=step.speed, standalone=False
+                    )
 
-            # Brief settling pause for Nav2 internal state stabilisation
-            time.sleep(0.5)
+                elif step.action.lower() == "spin":
+                    result = self._spin_tool._run(
+                        angle=step.value, standalone=False
+                    )
 
-        _publish_feedback(
-            self.connector,
-            _("[LARIC]: Sequence completed successfully.")
-        )
-        return (
-            "SUCCESS. All sequence steps executed successfully. "
-            "DO NOT CALL ANY OTHER TOOLS."
-        )
+                else:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Error - Unknown action type '{action}' at "
+                          "step {i}. Valid types are 'move' and 'spin'.")
+                        .format(action=step.action, i=index + 1)
+                    )
+                    return (
+                        f"ERROR: Unknown action type '{step.action}' at step "
+                        f"{index + 1}. Valid types are 'move' and 'spin'. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+
+                # 4. Propagate errors upward; do not continue a failed sequence
+                if "ERROR" in result or "ABORTED" in result:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Sequence interrupted at step {i}.")
+                        .format(i=index + 1)
+                    )
+                    return (
+                        f"Sequence halted at step {index + 1}: {result}. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+
+                # Brief settling pause for Nav2 internal state stabilisation
+                time.sleep(0.5)
+
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Sequence completed successfully.")
+            )
+            return (
+                "SUCCESS. All sequence steps executed successfully. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+        finally:
+            self.motion_lock.release()
 
 
 # ------------------------------------------------------------------------------
@@ -971,11 +981,6 @@ class NavigationTool(BaseTool):
     Sends autonomous navigation goals to Nav2 via the NavigateToPose action 
     server.
 
-    Resolves semantic location names to map coordinates via 'KNOWN_LOCATIONS',
-    then delegates to RAI's 'NavigateToPoseTool'. Monitors the result in a
-    polling loop on the agent thread so the 'abort_flag' set by 'StopTool'
-    remains effective during long navigation missions.
-
     Attributes:
         name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
         description: Read by the LLM to decide when to invoke this tool.
@@ -983,7 +988,7 @@ class NavigationTool(BaseTool):
         connector: Active 'ROS2Connector' instance.
         abort_event: Shared 'threading.Event'; observed by the polling loop
             so 'StopTool' can interrupt a long mission.
-        motion_lock: Shared 'threading.Lock' serialising motion commands.
+        motion_lock: Shared 'threading.RLock' serialising motion commands.
         localised_event: Shared 'threading.Event'; prerequisite for sending
             navigation goals.
         _rai_nav_tool: RAI 'NavigateToPoseTool' that sends the goal.
@@ -996,7 +1001,7 @@ class NavigationTool(BaseTool):
         "Sends an autonomous navigation goal to Nav2. "
         f"Available semantic locations: {list(KNOWN_LOCATIONS.keys())}. "
         "Can also accept explicit X/Y map coordinates. "
-        "Nav2 MUST be localised via '2D Pose Estimate' in RViz before calling. "
+        "Nav2 MUST be localised before calling. "
         "Use for destination-based commands: 've al baño', etc."
     )
     args_schema: Type[BaseModel] = NavigationInput
@@ -1067,21 +1072,21 @@ class NavigationTool(BaseTool):
         if not self.localised_event.is_set():
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                  "Estimate' in RViz, then retry.")
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
-        # See MoveTool for the rationale on the 'not' here: acquire() returns
-        # True on success, so we reject only when it returns False (lock busy).
+        # Non-blocking acquire (see MoveTool): a False result means another
+        # motion holds the lock, so the command is rejected.
         if not self.motion_lock.acquire(blocking=False):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
-                  "Please wait for it to complete or use 'stop_robot' to abort it "
-                  "before issuing a new command.")
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -1089,11 +1094,13 @@ class NavigationTool(BaseTool):
             )
 
         try:
-            # 1. Resolve destination: semantic name takes priority over raw coords
+            # 1. Resolve destination: semantic name beats raw coordinates.
             if target_x is not None and target_y is not None:
                 x, y = target_x, target_y
                 yaw_rad = math.radians(target_yaw)
-                dest_label = _("coordinates ({x:.2f}, {y:.2f})").format(x=x, y=y)
+                dest_label = (
+                    _("coordinates ({x:.2f}, {y:.2f})").format(x=x, y=y)
+                )
 
             elif location_name:
                 loc = location_name.lower().strip()
@@ -1106,7 +1113,7 @@ class NavigationTool(BaseTool):
                         .format(loc=loc)
                     )
                     return (
-                        f"ERROR. The Location '{loc}' was not found in "
+                        f"ERROR. The location '{loc}' was not found in "
                         "the semantic map of known locations. "
                         "DO NOT CALL ANY OTHER TOOLS. "
                     )
@@ -1136,38 +1143,25 @@ class NavigationTool(BaseTool):
 
             try: 
                 # 3. Send the NavigateToPose goal via RAI
-                ''' DEBUG 1
-                start_result = str(
-                    self._rai_nav_tool._run(x=x, y=y, z=0.0, yaw=yaw_rad)
-                ).strip()
-                '''
                 self._rai_nav_tool._run(x=x, y=y, z=0.0, yaw=yaw_rad)
 
-            # -----------------------------------------------------------------
-            # print(f"\n[DEBUG 1] {start_result}\n") # navigating to pose
-            # -----------------------------------------------------------------
 
             except Exception as exc:
-                # -----------------------------------------------------------------
-                # print(f"\n[DEBUG 2] {exc}\n") # Action goal was not accepted
-                # -----------------------------------------------------------------
                 _publish_feedback(
                     self.connector,
-                    _("[LARIC]: Error - Ensure the robot is localised: use '2D Pose "
-                      "Estimate' in RViz, then retry.")
+                    _("[LARIC]: Error - The robot is not localised. Set its "
+                      "initial pose on the map, then retry.")
                 )
                 return (
                     f"ERROR. Failed to send navigation goal: {exc}. "
                     "DO NOT CALL ANY OTHER TOOLS." 
                 )
 
-            # 4. Poll for the navigation result (maximum 5 minutes)
-            # Polling runs on the agent thread to keep abort_flag responsive.
-            # The agent cannot accept new tool calls while this loop runs; StopTool
-            # sets abort_flag from a concurrent think() thread to break out early.
-            timeout = 300.0
+            # 4. Poll for the navigation result (max 3 minutes); StopTool can
+            #    set abort_event from another thread to break out early.
+            timeout = NAV_TIMEOUT_S
             elapsed = 0.0
-            poll_interval = 0.5
+            poll_interval = NAV_POLL_INTERVAL_S
 
             while elapsed < timeout:
 
@@ -1187,9 +1181,6 @@ class NavigationTool(BaseTool):
                 try:
                     nav_result = str(self._rai_nav_result_tool._run()).strip()
 
-                    # -------------------------------------------------------------
-                    # print(f"\n[DEBUG 3] Navigation result: {nav_result}\n") # Action is not done yet, 6 (ABORTED), 4 (SUCCEED)
-                    # -------------------------------------------------------------
 
                     if nav_result == str(GoalStatus.STATUS_SUCCEEDED):
                         _publish_feedback(
@@ -1213,8 +1204,8 @@ class NavigationTool(BaseTool):
                             .format(dest=dest_label)
                         )
                         return (
-                            "ACTION FAILED. Nav2 could not find or execute a valid "
-                            "path. "
+                            "ACTION FAILED. Nav2 could not find or execute "
+                            "a valid path. "
                             "DO NOT CALL ANY OTHER TOOLS."
                         )
 
@@ -1228,11 +1219,11 @@ class NavigationTool(BaseTool):
             # 5. Timeout path
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Navigation to {dest} timed out (5 min).")
+                _("[LARIC]: Error - Navigation to {dest} timed out (3 min).")
                 .format(dest=dest_label)
             )
             return (
-                "ERROR: Navigation timeout (5 minutes). "
+                "ERROR: Navigation timeout (3 minutes). "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
         
@@ -1246,11 +1237,6 @@ class GestureTool(BaseTool):
     """
     Performs a physical negation gesture via direct '/cmd_vel' publication.
 
-    Produces a brief left-right angular oscillation to communicate "no" to a
-    human observer. Direct '/cmd_vel' use is intentional here: the gesture is
-    a non-navigational social signal, executes even when Nav2 is idle, and its
-    short duration (< 2 s) does not meaningfully perturb AMCL localisation.
-
     Attributes:
         name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
         description: Read by the LLM to decide when to invoke this tool.
@@ -1258,7 +1244,7 @@ class GestureTool(BaseTool):
         connector: Active 'ROS2Connector' for '/cmd_vel' publication.
         abort_event: Shared 'threading.Event'; observed between oscillation
             steps so the gesture is interruptible.
-        motion_lock: Shared 'threading.Lock'; acquired so a gesture cannot
+        motion_lock: Shared 'threading.RLock'; acquired so a gesture cannot
             overlap a Nav2 motion (both would write '/cmd_vel').
     """
 
@@ -1313,8 +1299,8 @@ class GestureTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
-                  "Please wait for it to complete or use 'stop_robot' to abort it "
-                  "before issuing a new command.")
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -1392,11 +1378,6 @@ class StopTool(BaseTool):
     """
     Issues an immediate emergency stop for all active robot motion.
 
-    Sets 'abort_flag' to interrupt any currently-polling tool (SpinTool,
-    MoveTool, NavigationTool), publishes a zero-velocity 'Twist' to
-    '/cmd_vel' as an immediate fallback, and cancels any active Nav2 goal
-    via RAI's 'CancelNavigateToPoseTool'.
-
     Attributes:
         name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
         description: Read by the LLM to decide when to invoke this tool.
@@ -1406,11 +1387,6 @@ class StopTool(BaseTool):
             polling motion tool to terminate immediately.
         _cancel_nav_tool: RAI 'CancelNavigateToPoseTool' used to cancel any
             active Nav2 goal.
-
-    Note:
-        Intentionally does NOT acquire 'motion_lock'. The whole point of this
-        tool is to interrupt a motion that already holds the lock; trying to
-        acquire it would deadlock.
     """
 
     name: str = "stop_robot"
@@ -1467,10 +1443,8 @@ class StopTool(BaseTool):
         except Exception:
             pass  # Non-fatal if no active goal exists
 
-        # 3. Publish zero velocity to /cmd_vel as an immediate fallback.
-        # Note: when Nav2 is active, its controller will override this on the
-        # next control cycle. The CancelNavigateToPoseTool call below is the
-        # authoritative stop for all Nav2-driven motion.
+        # 3. Publish zero velocity to /cmd_vel as an immediate fallback;
+        #    Nav2's cancel (above) is the authoritative stop.
         try:
             self.connector.send_message(
                 ROS2Message(payload={
@@ -1481,7 +1455,7 @@ class StopTool(BaseTool):
                 msg_type="geometry_msgs/msg/Twist",
             )
         except Exception:
-            # Non-fatal: abort_flag and Nav2 cancel are the primary mechanisms
+            # Non-fatal: abort_event and Nav2 cancel are the primary mechanisms
             pass
 
         _publish_feedback(
@@ -1502,9 +1476,6 @@ def _publish_feedback(connector: ROS2Connector, message: str) -> None:
     """
     Publishes a status message to the '/robot_feedback' ROS 2 topic.
 
-    Safe to call from any thread. Failures are silently swallowed: feedback
-    is best-effort and must never propagate into a tool's return value.
-
     Args:
         connector: Active 'ROS2Connector' instance.
         message: Plaintext status message to publish.
@@ -1520,22 +1491,24 @@ def _publish_feedback(connector: ROS2Connector, message: str) -> None:
 
 
 def _compute_spin_allowance(
-    target_yaw_rad: float, 
-    speed_rad_s: float = 0.5
+    target_yaw_rad: float,
+    speed_rad_s: float = SPIN_SPEED_RAD_S
 ) -> float:
     """
     Computes a conservative 'time_allowance' for the Nav2 Spin action.
 
     Args:
         target_yaw_rad: Target rotation magnitude in radians (sign ignored).
-        speed_rad_s: Expected rotation speed in rad/s. Defaults to 0.5.
+        speed_rad_s: Expected rotation speed in rad/s. Defaults to
+            config.SPIN_SPEED_RAD_S.
 
     Returns:
-        Estimated duration in seconds, with a 5-second safety buffer and a
-        minimum floor of 10 seconds.
+        Estimated duration in seconds, with a SPIN_ALLOWANCE_BUFFER_S safety
+        buffer and a SPIN_ALLOWANCE_MIN_S floor.
     """
     kinematic_estimate = abs(target_yaw_rad) / max(speed_rad_s, 0.01)
-    return max(kinematic_estimate + 5.0, 10.0)
+    return max(kinematic_estimate + SPIN_ALLOWANCE_BUFFER_S,
+               SPIN_ALLOWANCE_MIN_S)
 
 
 def _compute_move_allowance(distance_m: float, speed_m_s: float) -> float:
@@ -1547,10 +1520,10 @@ def _compute_move_allowance(distance_m: float, speed_m_s: float) -> float:
         speed_m_s: Commanded speed in m/s. Clamped to a minimum of 0.01.
 
     Returns:
-        Estimated duration in seconds with a 10-second safety buffer.
+        Estimated duration in seconds with a MOVE_ALLOWANCE_BUFFER_S buffer.
     """
     kinematic_estimate = distance_m / max(speed_m_s, 0.01)
-    return kinematic_estimate + 10.0
+    return kinematic_estimate + MOVE_ALLOWANCE_BUFFER_S
 
 
 # ==============================================================================
@@ -1561,13 +1534,6 @@ def _compute_move_allowance(distance_m: float, speed_m_s: float) -> float:
 def main() -> None:
     """
     Main entry point for the LARIC robot agent system.
-
-    Initialises the ROS 2 infrastructure, instantiates LangChain tools,
-    connects to the LLM backend, and registers the human-input callback.
-    Runs until interrupted with Ctrl-C.
-
-    The '@ROS2Context()' decorator initialises 'rclpy' and guarantees
-    proper cleanup on exit.
     """
     # 1. Initialise ROS 2 connector
     ros_connector = ROS2Connector()
@@ -1577,31 +1543,14 @@ def main() -> None:
 
     _publish_feedback(ros_connector, _("[SYSTEM]: Starting LARIC Agent..."))
 
-    # 2. Initialise concurrency primitives.
-    #
-    #    abort_event (threading.Event):
-    #      Set by StopTool to cancel active motion tools. Each motion tool clears
-    #      it at the start of a new action. Using an Event rather than a plain bool
-    #      provides atomic set/is_set semantics without an explicit lock.
-    #
-    #    motion_lock (threading.Lock):
-    #      Prevents two motion commands from running concurrently. Acquired
-    #      non-blockingly at the entry of each motion _run(); if unavailable the
-    #      tool returns an explicit error immediately.
-    #      StopTool intentionally does NOT acquire this lock so it can always
-    #      interrupt an in-progress motion.
-    #
-    #    localised_event (threading.Event):
-    #      Set when /initialpose is received (user completed '2D Pose Estimate'
-    #      in RViz). Cleared when the localisation is lost (future improvement:
-    #      subscribe to AMCL status). All motion tools check this as a guard.
+    # 2. Initialise the shared concurrency primitives. StopTool never holds
+    #    motion_lock so it can always interrupt an in-progress motion.
     abort_event     = threading.Event()
-    motion_lock     = threading.Lock()
+    motion_lock     = threading.RLock()
     localised_event = threading.Event()
+    _localised_ready_at = time.time() + INITIALPOSE_GRACE_S
 
-    # 3. Instantiate LangChain tools (Dependency Injection).
-    #    Each tool receives its dependencies explicitly at construction time,
-    #    making coupling visible and testable.
+    # 3. Instantiate LangChain tools (dependency injection).
     _publish_feedback(ros_connector, _("[SYSTEM]: Loading Nav2 tools..."))
     tools = [
         SpinTool(
@@ -1633,7 +1582,6 @@ def main() -> None:
             abort_event=abort_event,
             motion_lock=motion_lock,
         ),
-        # StopTool receives only abort_event, not motion_lock — by design.
         StopTool(
             connector=ros_connector,
             abort_event=abort_event,
@@ -1641,10 +1589,27 @@ def main() -> None:
     ]
 
     # 4. Connect to the LLM backend
+    _publish_feedback(
+        ros_connector,
+        _("[SYSTEM]: Mode - is_from_lab={lab} ({llm}), "
+          "is_real_robot={real} ({robot}).").format(
+            lab=is_from_lab,
+            llm=("Ollama lab" if is_from_lab else "Groq cloud"),
+            real=is_real_robot,
+            robot=("real ROSbot" if is_real_robot else "simulation"),
+        )
+    )
     _publish_feedback(ros_connector, _("[SYSTEM]: Connecting to LLM..."))
     if is_from_lab:
         llm = ChatOllama(temperature=0, model=MODEL, base_url=URL)
     else:
+        if not GROQ_API_KEY:
+            _publish_feedback(
+                ros_connector,
+                _("[SYSTEM]: ERROR - Groq selected (is_from_lab=False) but "
+                  "GROQ_API_KEY is not set. Export it, or switch to the lab "
+                  "Ollama (is_from_lab=True).")
+            )
         llm = ChatGroq(
             temperature=0, 
             model=GROQ_MODEL_70B, 
@@ -1670,10 +1635,6 @@ def main() -> None:
     def on_human_input(msg: ROS2Message) -> None:
         """
         Processes incoming user commands from the '/from_human' topic.
-
-        Extracts the user's text, publishes an acknowledgement, and launches
-        the LangChain reasoning cycle in a daemon thread so that the ROS 2
-        spin loop is never blocked.
 
         Args:
             msg: Incoming 'ROS2Message' wrapping a 'std_msgs/String' payload.
@@ -1742,22 +1703,20 @@ def main() -> None:
     # 7. Initial pose listener for localisation detection
     def on_initial_pose(msg: ROS2Message) -> None:
         """
-        Detects when the user sets the initial pose in RViz.
-
-        Updates the global state to mark the robot as localised, which is a 
-        mandatory prerequisite before the agent is allowed to send any 
-        movement goals to the Nav2 action servers.
+        Detects when the operator sets the initial pose.
 
         Args:
-            msg: Incoming 'ROS2Message' wrapping a 
-                 'geometry_msgs/PoseWithCovarianceStamped' payload emitted 
-                 by the RViz '2D Pose Estimate' tool.
+            msg: Incoming 'ROS2Message' wrapping a
+                 'geometry_msgs/PoseWithCovarianceStamped' payload. The pose
+                 comes from RViz '2D Pose Estimate' in simulation or the
+                 Foxglove UI on the real robot.
         """
+        if time.time() < _localised_ready_at:
+            return
         localised_event.set()
         _publish_feedback(
             ros_connector,
-            _("[LARIC]: Robot localised via '2D Pose Estimate'. "
-              "Ready for commands.")
+            _("[LARIC]: Robot localised. Ready for commands.")
         )
 
     try:
@@ -1779,10 +1738,6 @@ def main() -> None:
         """
         Triggers instantly upon receiving the E-Stop signal from the UI.
         Bypasses the LLM entirely to guarantee deterministic braking.
-
-        Locates the registered 'stop_robot' tool and invokes its underlying
-        hardware-halt routine directly, cancelling any active Nav2 goals or
-        running motion threads.
 
         Args:
             msg: Incoming 'ROS2Message' wrapping a 'std_msgs/Bool' payload.
@@ -1811,15 +1766,14 @@ def main() -> None:
     except Exception as exc:
         _publish_feedback(
             ros_connector,
-            _("[SYSTEM]: Warning - Could not subscribe to /emergency_stop: {exc}")
+            _("[SYSTEM]: Warning - Could not subscribe to "
+              "/emergency_stop: {exc}")
             .format(exc=exc)
         )
 
     # ----- /language_changed listener -----
-    # The HMI process publishes the new language code here whenever the
-    # operator switches it in the dropdown. We propagate it to our local
-    # gettext catalog so subsequent '_()' calls in this process translate
-    # correctly. Without this subscription, only the HMI would update.
+    # Propagates the HMI's language change to this process's gettext catalog
+    # (separate processes, so this topic is the only sync path).
     def on_language_changed(msg: ROS2Message) -> None:
         """
         Updates the agent's translator when the HMI changes language.
@@ -1846,7 +1800,8 @@ def main() -> None:
     except Exception as exc:
         _publish_feedback(
             ros_connector,
-            _("[SYSTEM]: Warning - Could not subscribe to /language_changed: {exc}")
+            _("[SYSTEM]: Warning - Could not subscribe to "
+              "/language_changed: {exc}")
             .format(exc=exc)
         )
 
@@ -1856,8 +1811,8 @@ def main() -> None:
     )
     _publish_feedback(
         ros_connector,
-        _("[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the "
-          "robot before sending commands.")
+        _("[LARIC]: IMPORTANT - Set the robot's initial pose on the map "
+          "before sending commands.")
     )
 
     # 9. Keep-alive loop

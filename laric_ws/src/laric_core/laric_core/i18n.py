@@ -2,23 +2,9 @@
 LARIC System - Internationalization (i18n)
 Copyright (c) 2026 LARIC. All rights reserved.
 
-Single source of truth for translation handling. Exposes a 'set_language'
-function and a translator '_' that ALWAYS consults the currently active
-gettext catalog at call time.
-
-Rationale:
-    The naive pattern 'from config import _' captures a reference to whatever
-    callable existed at import time. Reassigning the module attribute later
-    (config._ = ...) does NOT update consumers that already imported it,
-    leaving every previously-imported '_' pointing to the stale translator.
-    To work around that, '_' here is a thin wrapper that looks up the
-    current 'gettext.NullTranslations' on every call, so changing the
-    language at runtime is observed everywhere automatically.
-
-Typical usage:
-    from i18n import _, set_language
-    set_language("es")
-    print(_("Hello"))           # → "Hola"
+Single source of truth for translation. Exposes 'set_language' and a
+translator '_' that resolves the active gettext catalog on every call, so a
+runtime language switch is observed by every module that imported '_'.
 """
 
 import gettext
@@ -48,8 +34,7 @@ DEFAULT_LANGUAGE: str = "en"
 # RUNTIME STATE
 # ==============================================================================
 
-# These are deliberately module-level so the translator reassignment in
-# set_language() is observed by every consumer of '_' on the next call.
+# Module-level so set_language()'s reassignment is seen by every '_' caller.
 _current_language: str = DEFAULT_LANGUAGE
 _translator: gettext.NullTranslations = gettext.NullTranslations()
 
@@ -88,10 +73,6 @@ def _(message: str) -> str:
     """
     Translates 'message' using the currently active catalog.
 
-    Looking the translator up at call time (rather than capturing it at
-    import time) is what makes runtime language switching work across
-    every module that imports this function.
-
     Args:
         message: Source-language (English) message identifier exactly as
             it appears in the .po files.
@@ -105,4 +86,3 @@ def _(message: str) -> str:
 
 # Initialise with the default language so '_' is usable immediately on import.
 set_language(DEFAULT_LANGUAGE)
-

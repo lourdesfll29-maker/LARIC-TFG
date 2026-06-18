@@ -1,6 +1,5 @@
-# Spanish translation of the LARIC system messages.
-# Copyright (c) 2026 LARIC.
-# This file is distributed under the same license as the LARIC package.
+# LARIC System - Spanish translation of the LARIC system messages.
+# Copyright (c) 2026 LARIC. All rights reserved.
 #
 msgid ""
 msgstr ""
@@ -82,11 +81,11 @@ msgstr "[ERROR] Error inesperado durante el procesamiento de audio: {}"
 # ----------------------------------------------------------------------------
 
 msgid ""
-"[LARIC]: Error - Ensure the robot is localised: use '2D Pose Estimate' in "
-"RViz, then retry."
+"[LARIC]: Error - The robot is not localised. Set its initial pose on the map, "
+"then retry."
 msgstr ""
-"[LARIC]: Error - Asegúrate de que el robot esté localizado: usa '2D Pose "
-"Estimate' en RViz y vuelve a intentarlo."
+"[LARIC]: Error - El robot no está localizado. Fija su pose inicial en el mapa "
+"y vuelve a intentarlo."
 
 msgid ""
 "[LARIC]: Error - Another action is currently in progress. Please wait for "
@@ -107,6 +106,9 @@ msgstr "[LARIC]: Rotación cancelada."
 
 msgid "[LARIC]: Rotation completed successfully."
 msgstr "[LARIC]: Rotación completada con éxito."
+
+msgid "[LARIC]: Rotation could not be completed. Obstacle detected."
+msgstr "[LARIC]: No se pudo completar la rotación. Obstáculo detectado."
 
 msgid "[LARIC]: Error - Spin timed out."
 msgstr "[LARIC]: Error - Tiempo de espera agotado durante la rotación."
@@ -129,6 +131,9 @@ msgstr "[LARIC]: Movimiento cancelado."
 
 msgid "[LARIC]: Movement completed successfully."
 msgstr "[LARIC]: Movimiento completado con éxito."
+
+msgid "[LARIC]: Movement could not be completed. Obstacle detected."
+msgstr "[LARIC]: No se pudo completar el movimiento. Obstáculo detectado."
 
 msgid "[LARIC]: Error - Movement timed out."
 msgstr "[LARIC]: Error - Tiempo de espera agotado durante el movimiento."
@@ -198,8 +203,8 @@ msgstr "[LARIC]: Llegada a {dest}."
 msgid "[LARIC]: Error - Could not reach {dest}. Nav2 aborted."
 msgstr "[LARIC]: Error - No se pudo llegar a {dest}. Nav2 ha abortado."
 
-msgid "[LARIC]: Error - Navigation to {dest} timed out (5 min)."
-msgstr "[LARIC]: Error - La navegación a {dest} agotó el tiempo (5 min)."
+msgid "[LARIC]: Error - Navigation to {dest} timed out (3 min)."
+msgstr "[LARIC]: Error - La navegación a {dest} agotó el tiempo (3 min)."
 
 # ----------------------------------------------------------------------------
 # GestureTool
@@ -246,11 +251,8 @@ msgstr "[LARIC]: ERROR - {exc}"
 msgid "[SYSTEM]: Warning - Could not subscribe to /from_human: {exc}"
 msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /from_human: {exc}"
 
-msgid ""
-"[LARIC]: Robot localised via '2D Pose Estimate'. Ready for commands."
-msgstr ""
-"[LARIC]: Robot localizado mediante '2D Pose Estimate'. Listo para recibir "
-"comandos."
+msgid "[LARIC]: Robot localised. Ready for commands."
+msgstr "[LARIC]: Robot localizado. Listo para recibir comandos."
 
 msgid "[SYSTEM]: Warning - Could not subscribe to /initialpose: {exc}"
 msgstr "[SISTEMA]: Aviso - No se pudo suscribir a /initialpose: {exc}"
@@ -268,12 +270,23 @@ msgid "[LARIC]: Agent ready. Listening on /from_human."
 msgstr "[LARIC]: Agente listo. Escuchando en /from_human."
 
 msgid ""
-"[LARIC]: IMPORTANT - Use '2D Pose Estimate' in RViz to localise the robot "
-"before sending commands."
+"[LARIC]: IMPORTANT - Set the robot's initial pose on the map before sending "
+"commands."
 msgstr ""
-"[LARIC]: IMPORTANTE - Usa '2D Pose Estimate' en RViz para localizar el "
-"robot antes de enviar comandos."
+"[LARIC]: IMPORTANTE - Fija la pose inicial del robot en el mapa antes de "
+"enviar comandos."
 
 msgid "[SYSTEM]: Shutting down LARIC Agent..."
 msgstr "[SISTEMA]: Apagando el Agente LARIC..."
 
+msgid ""
+"[SYSTEM]: Mode - is_from_lab={lab} ({llm}), is_real_robot={real} ({robot})."
+msgstr ""
+"[SISTEMA]: Modo - is_from_lab={lab} ({llm}), is_real_robot={real} ({robot})."
+
+msgid ""
+"[SYSTEM]: ERROR - Groq selected (is_from_lab=False) but GROQ_API_KEY is not "
+"set. Export it, or switch to the lab Ollama (is_from_lab=True)."
+msgstr ""
+"[SISTEMA]: ERROR - Groq seleccionado (is_from_lab=False) pero GROQ_API_KEY no "
+"está definida. Expórtala, o cambia al Ollama del laboratorio (is_from_lab=True)."

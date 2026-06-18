@@ -1,10 +1,11 @@
 # LARIC System - Project Dependencies
 # Copyright (c) 2026 LARIC. All rights reserved.
 #
-# Specifies the Python package dependencies required to run the LARIC 
+# Specifies the Python package dependencies required to run the LARIC
 # Agent framework, ROS 2 integrations, and the Human-Machine Interface.
 
-# Artificial Intelligence & Agent Frameworklangchain>=0.3.0,<0.4.0
+# Artificial Intelligence & Agent Framework
+langchain>=0.3.0,<0.4.0
 langchain-core>=0.3.0,<0.4.0
 langchain-community>=0.3.0,<0.4.0
 langchain-aws

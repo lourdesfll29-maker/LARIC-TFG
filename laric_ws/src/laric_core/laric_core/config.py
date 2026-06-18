@@ -6,6 +6,9 @@ Centralises all runtime-configurable parameters:
     - Project paths        (BASE_DIR, PROJECT_ROOT, SHUTDOWN_SCRIPT_PATH)
     - LLM endpoints        (URL, MODEL, GROQ_API_KEY, GROQ_MODEL_70B, from_lab)
     - Semantic map         (KNOWN_LOCATIONS)
+    - Motion tunables      (SPEED_*, *_ALLOWANCE_*, POLL_*, NAV_TIMEOUT_S,
+                            INITIALPOSE_GRACE_S)
+    - HMI                  (HMI_GEOMETRY)
     - Agent system prompt  (SYSTEM_PROMPT, including the LANGUAGE RULE that
                             tells the LLM to mirror the user's language)
 
@@ -17,15 +20,14 @@ Translation handling lives in 'i18n.py'; consumers import data from
 import os
 
 
-# Toggle: False = Groq cloud inference, True = local Ollama at UPV
-is_from_lab: bool = True
-
 # ==============================================================================
-# ENVIRONMENT SELECTION
+# RUNTIME TOGGLES
 # ==============================================================================
-# True when the agent talks to the real Husarion ROSbot at the UPV lab.
-# False when running against the Gazebo simulation.
-# Distinct from 'from_lab' (which is about LLM endpoint, not robot environment).
+# is_from_lab   : False = Groq cloud LLM,    True = local Ollama at the UPV lab.
+# is_real_robot : False = Gazebo simulation, True = real Husarion ROSbot.
+#                 (is_real_robot is independent of is_from_lab: one selects the
+#                 robot environment, the other the LLM endpoint.)
+is_from_lab:   bool = False
 is_real_robot: bool = False
 
 
@@ -36,13 +38,13 @@ is_real_robot: bool = False
 # 1. Get the absolute path of the directory where this config.py file is located
 BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 
-# 2. Navigate up 3 directory levels to reach the workspace root (e.g., laric_ws)
+# 2. Navigate up 3 directory levels to reach the workspace root
 #    - First "..": exits the current folder (where config.py lives)
 #    - Second "..": exits the ROS 2 package folder
 #    - Third "..": exits the 'src' directory
 PROJECT_ROOT: str = os.path.abspath(os.path.join(BASE_DIR, "..", "..", ".."))
 
-# 3. Define the dynamic, system-agnostic path to the shutdown script
+# Shutdown script for the active environment.
 SHUTDOWN_SCRIPT_PATH: str = os.path.join(
     PROJECT_ROOT, "scripts",
     "stop_real.sh" if is_real_robot else "stop_simulation.sh"
@@ -63,17 +65,52 @@ GROQ_MODEL_70B: str = "llama-3.3-70b-versatile"
 
 
 # ==============================================================================
+# MOTION TUNABLES
+# ==============================================================================
+
+# Default linear speeds (m/s) used by MoveTool when the user gives none.
+SPEED_SLOW:        float = 0.15
+SPEED_NORMAL_FWD:  float = 0.3
+SPEED_NORMAL_BACK: float = 0.2
+SPEED_FAST:        float = 0.6
+
+# Expected rotation speed (rad/s) used to size the Spin time_allowance.
+SPIN_SPEED_RAD_S: float = 0.5
+
+# Safety buffers / floor for the Nav2 action 'time_allowance' (seconds).
+SPIN_ALLOWANCE_BUFFER_S: float = 5.0
+SPIN_ALLOWANCE_MIN_S:    float = 10.0
+MOVE_ALLOWANCE_BUFFER_S: float = 10.0
+
+# Polling intervals (seconds) for the primitive and navigation result loops.
+POLL_INTERVAL_S:     float = 0.2
+NAV_POLL_INTERVAL_S: float = 0.5
+
+# Maximum time to wait for a navigation goal to finish (seconds).
+NAV_TIMEOUT_S: float = 180.0
+
+# Seconds after agent startup during which a retained/stale /initialpose is
+# ignored, so a restart does not inherit a previous session's localisation.
+INITIALPOSE_GRACE_S: float = 5.0
+
+
+# ==============================================================================
+# HMI
+# ==============================================================================
+# (x, y, width, height) of the HMI window. Override without editing this file
+# via the env var  LARIC_HMI_GEOMETRY="x,y,w,h".
+_g = os.getenv("LARIC_HMI_GEOMETRY", "1300,200,500,600").split(",")
+try:
+    HMI_GEOMETRY: tuple = (int(_g[0]), int(_g[1]), int(_g[2]), int(_g[3]))
+except (ValueError, IndexError):
+    HMI_GEOMETRY = (1300, 200, 500, 600)
+
+
+# ==============================================================================
 # SEMANTIC MAP (KNOWLEDGE BASE)
 # ==============================================================================
-# Maps human-readable location names to map-frame coordinates.
-#
-# Two coordinate sets are maintained so that simulation and real-robot
-# operation can coexist without manual coordinate editing between sessions.
-# The active set is selected by 'is_real_robot' above.
-#
-# Structure: { "location_id": {"x": float, "y": float, "yaw": float} }
-#   - x, y : position in the Nav2 map frame (meters)
-#   - yaw  : desired final heading (radians); 0.0 = facing the +X axis
+# Location name -> map-frame coordinates {id: {x, y, yaw}} (m, m, rad).
+# Two sets (sim / real), selected by 'is_real_robot' above.
 
 # --- Simulation: Gazebo turtlebot3_house world ---
 KNOWN_LOCATIONS_SIM: dict = {
@@ -113,9 +150,7 @@ KNOWN_LOCATIONS: dict = (
 # ==============================================================================
 # AGENT SYSTEM PROMPT
 # ==============================================================================
-# This prompt defines the LLM agent's complete behavioural contract.
-# It is the primary mechanism for ensuring deterministic, safe tool selection.
-# Each rule exists because a specific failure mode was observed during testing.
+# Behavioural contract for the LLM (deterministic, safe tool selection).
 #
 # CRITICAL - tool names declared here MUST exactly match the `name` attribute
 # of each BaseTool subclass in agent_logic.py:
@@ -127,7 +162,8 @@ KNOWN_LOCATIONS: dict = (
 #   stop_robot          -> StopTool.name
 
 SYSTEM_PROMPT: str = '''
-You are LARIC, the AI Operating System of a TurtleBot3.
+You are LARIC, the AI control system of a mobile robot (a TurtleBot3 in
+simulation or a real Husarion ROSbot 3).
 Your task is to understand the user's intent and call exactly ONE appropriate
 tool.
 
@@ -238,4 +274,3 @@ RULE 4 - EVALUATE OBSERVATION: After calling a tool and receiving its result:
 RULE 5 - EXPLICIT STOPS ONLY: Only call `stop_robot` when the user
   explicitly commands a halt (e.g., "stop", "para", "detente", "quieto").
 '''.replace("__LOCATIONS_LIST__", ", ".join(KNOWN_LOCATIONS.keys()))
-
