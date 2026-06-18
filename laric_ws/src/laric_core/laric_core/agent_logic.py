@@ -111,6 +111,10 @@ from config import (
     NAV_POLL_INTERVAL_S,
     NAV_TIMEOUT_S,
     INITIALPOSE_GRACE_S,
+    GESTURE_ANGULAR_VEL_RAD_S,
+    GESTURE_WARMUP_DURATION_S,
+    GESTURE_OSCILLATION_DURATION_S,
+    GESTURE_PUBLISH_PERIOD_S,
 )
 from i18n import _, set_language
 
@@ -1318,30 +1322,24 @@ class GestureTool(BaseTool):
             )
 
             # 2. Oscillation pattern: alternating left/right angular velocity
-            angular_steps = [1.0, -1.0, 1.0, -1.0]
-            for angular_z in angular_steps:
+            phases = [(+GESTURE_ANGULAR_VEL_RAD_S, GESTURE_WARMUP_DURATION_S)]
+            for sign in (-1.0, +1.0, -1.0):
+                phases.append(
+                    (sign * GESTURE_ANGULAR_VEL_RAD_S, GESTURE_OSCILLATION_DURATION_S)
+                )
+
+            for angular_z, duration in phases:
                 if self.abort_event.is_set():
                     break
-
-                self.connector.send_message(
-                    ROS2Message(payload={
-                        "linear":  {"x": 0.0, "y": 0.0, "z": 0.0},
-                        "angular": {"x": 0.0, "y": 0.0, "z": angular_z},
-                    }),
-                    target="/cmd_vel",
-                    msg_type="geometry_msgs/msg/Twist",
-                )
-                time.sleep(0.35)
+                phase_start = time.time()
+                while time.time() - phase_start < duration:
+                    if self.abort_event.is_set():
+                        break
+                    _publish_cmd_vel(self.connector, angular_z=angular_z)
+                    time.sleep(GESTURE_PUBLISH_PERIOD_S)
 
             # 3. Publish zero-velocity to ensure the robot is fully stationary
-            self.connector.send_message(
-                ROS2Message(payload={
-                    "linear":  {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
-                }),
-                target="/cmd_vel",
-                msg_type="geometry_msgs/msg/Twist",
-            )
+            _publish_cmd_vel(self.connector)
 
             if self.abort_event.is_set():
                 _publish_feedback(
@@ -1446,16 +1444,9 @@ class StopTool(BaseTool):
         # 3. Publish zero velocity to /cmd_vel as an immediate fallback;
         #    Nav2's cancel (above) is the authoritative stop.
         try:
-            self.connector.send_message(
-                ROS2Message(payload={
-                    "linear":  {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
-                }),
-                target="/cmd_vel",
-                msg_type="geometry_msgs/msg/Twist",
-            )
+            _publish_cmd_vel(self.connector)
         except Exception:
-            # Non-fatal: abort_event and Nav2 cancel are the primary mechanisms
+            # Non-fatal: abort_flag and Nav2 cancel are the primary mechanisms
             pass
 
         _publish_feedback(
@@ -1488,6 +1479,51 @@ def _publish_feedback(connector: ROS2Connector, message: str) -> None:
         )
     except Exception:
         pass
+
+
+def _publish_cmd_vel(
+    connector: ROS2Connector,
+    linear_x: float = 0.0,
+    angular_z: float = 0.0,
+) -> None:
+    """
+    Publishes a velocity command to '/cmd_vel'. Selects the message type based 
+    on the active backend:
+      - Real robot: 'geometry_msgs/msg/TwistStamped'.
+      - Simulation: 'geometry_msgs/msg/Twist'.
+
+    Args:
+        connector: Active 'ROS2Connector' instance.
+        linear_x: Linear velocity along the X axis in m/s. Defaults to 0.0.
+        angular_z: Angular velocity around the Z axis in rad/s.
+            Positive = counter-clockwise (left). Defaults to 0.0.
+    """
+    twist = {
+        "linear":  {"x": float(linear_x), "y": 0.0, "z": 0.0},
+        "angular": {"x": 0.0, "y": 0.0, "z": float(angular_z)},
+    }
+    if is_real_robot:
+        now = time.time()
+        connector.send_message(
+            ROS2Message(payload={
+                "header": {
+                    "stamp": {
+                        "sec": int(now),
+                        "nanosec": int((now - int(now)) * 1e9),
+                    },
+                    "frame_id": "",
+                },
+                "twist": twist,
+            }),
+            target="/cmd_vel",
+            msg_type="geometry_msgs/msg/TwistStamped",
+        )
+    else:
+        connector.send_message(
+            ROS2Message(payload=twist),
+            target="/cmd_vel",
+            msg_type="geometry_msgs/msg/Twist",
+        )
 
 
 def _compute_spin_allowance(

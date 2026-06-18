@@ -27,8 +27,8 @@ import os
 # is_real_robot : False = Gazebo simulation, True = real Husarion ROSbot.
 #                 (is_real_robot is independent of is_from_lab: one selects the
 #                 robot environment, the other the LLM endpoint.)
-is_from_lab:   bool = False
-is_real_robot: bool = False
+is_from_lab:   bool = True
+is_real_robot: bool = True
 
 
 # ==============================================================================
@@ -92,6 +92,12 @@ NAV_TIMEOUT_S: float = 180.0
 # Seconds after agent startup during which a retained/stale /initialpose is
 # ignored, so a restart does not inherit a previous session's localisation.
 INITIALPOSE_GRACE_S: float = 5.0
+
+# Direct /cmd_vel oscillation that signals "no" without going through Nav2.
+GESTURE_ANGULAR_VEL_RAD_S:      float = 0.8
+GESTURE_WARMUP_DURATION_S:      float = 0.25
+GESTURE_OSCILLATION_DURATION_S: float = 0.5
+GESTURE_PUBLISH_PERIOD_S:       float = 0.05
 
 
 # ==============================================================================

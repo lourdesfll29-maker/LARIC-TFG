@@ -49,7 +49,7 @@ import speech_recognition as sr
 # -- ROS 2 -------------------------------------------------------------------
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistStamped
 from std_msgs.msg import Bool, String
 
 # -- PyQt5 -------------------------------------------------------------------
@@ -69,7 +69,7 @@ from PyQt5.QtWidgets import (
 )
 
 # -- Project configuration & i18n --------------------------------------------
-from config import HMI_GEOMETRY, SHUTDOWN_SCRIPT_PATH
+from config import HMI_GEOMETRY, SHUTDOWN_SCRIPT_PATH, is_real_robot
 from i18n import _, set_language
 
 
@@ -132,7 +132,8 @@ class InterfaceNode(Node, QWidget):
         log_signal (pyqtSignal): Qt signal used to safely append HTML text to
             the feedback log from any thread. Accepts '(text: str, color: str)'.
         pub_human: ROS 2 publisher for 'std_msgs/String' on '/from_human'.
-        pub_cmd_vel: ROS 2 publisher for 'geometry_msgs/Twist' on '/cmd_vel'.
+        pub_cmd_vel: ROS 2 publisher for 'geometry_msgs/TwistStamped' on 
+            '/cmd_vel'.
         pub_emergency_stop: ROS 2 publisher for 'std_msgs/Bool' on
             '/emergency_stop'.
         pub_language: ROS 2 publisher for 'std_msgs/String' on
@@ -175,7 +176,11 @@ class InterfaceNode(Node, QWidget):
         self.pub_human = self.create_publisher(String, "/from_human", 10)
 
         # Direct /cmd_vel and /emergency_stop publishers for hardware halt
-        self.pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
+        # Real robot uses ros2_control's diff_drive_controller, which subscribes
+        # to /cmd_vel as TwistStamped (Jazzy default). Gazebo's simulation 
+        # plugin subscribes as plain Twist.
+        cmd_vel_type = TwistStamped if is_real_robot else Twist
+        self.pub_cmd_vel = self.create_publisher(cmd_vel_type, "/cmd_vel", 10)
         self.pub_emergency_stop = self.create_publisher(
             Bool, "/emergency_stop", 10
         )
@@ -528,7 +533,14 @@ class InterfaceNode(Node, QWidget):
         Immediately halts the robot without routing through the AI agent.
         """
         # Step 1: Hard-stop — direct /cmd_vel publish (Twist defaults to 0.0)
-        self.pub_cmd_vel.publish(Twist())
+        # TwistStamped is required on the real robot; the stamp is set to 'now' 
+        # so the diff_drive_controller does not reject the message as stale
+        if is_real_robot:
+            halt_msg = TwistStamped()
+            halt_msg.header.stamp = self.get_clock().now().to_msg()
+            self.pub_cmd_vel.publish(halt_msg)
+        else:
+            self.pub_cmd_vel.publish(Twist())
 
         # Step 2: Signal agent_logic to kill all running motion threads
         flag = Bool()
