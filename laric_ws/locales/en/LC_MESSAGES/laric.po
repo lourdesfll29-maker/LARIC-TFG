@@ -1,27 +1,25 @@
-# LARIC System - English source catalog for the system LARIC messages.
+# LARIC System - English source catalog for the LARIC system messages.
 # Copyright (c) 2026 LARIC. All rights reserved.
 #
 # Note: msgstr entries are intentionally empty; gettext falls back to msgid
-# (the source string) when a translation is missing, which gives correct
-# behaviour for the source language.
+# (the source string) when a translation is missing, which is correct for the
+# source language.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: LARIC\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-26 12:00+0200\n"
-"PO-Revision-Date: 2026-05-26 12:00+0200\n"
+"POT-Creation-Date: 2026-06-29 12:00+0200\n"
+"PO-Revision-Date: 2026-06-29 12:00+0200\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "Language: en\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 3.9\n"
-
-# ----------------------------------------------------------------------------
-# laric_interface.py
-# ----------------------------------------------------------------------------
+# ============================================================================
+# laric_interface.py — HMI labels, status and log messages (display only)
+# ============================================================================
 
 msgid "LARIC - Voice & Text Interface"
 msgstr ""
@@ -33,6 +31,12 @@ msgid "Type a command and press Enter..."
 msgstr ""
 
 msgid "EMERGENCY STOP (Ctrl+E)"
+msgstr ""
+
+msgid "[SYSTEM] Voice muted."
+msgstr ""
+
+msgid "[SYSTEM] Voice unmuted."
 msgstr ""
 
 msgid "[SYSTEM] Language changed."
@@ -80,9 +84,11 @@ msgstr ""
 msgid "[ERROR] Unexpected error during audio processing: {}"
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# agent_logic.py — common errors
-# ----------------------------------------------------------------------------
+# ============================================================================
+# agent_logic.py — operator-facing log messages (display, /robot_feedback)
+# ============================================================================
+
+# -- Common errors -----------------------------------------------------------
 
 msgid ""
 "[LARIC]: Error - The robot is not localised. Set its initial pose on the map, "
@@ -94,9 +100,7 @@ msgid ""
 "it to complete or use 'stop_robot' to abort it before issuing a new command."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# SpinTool
-# ----------------------------------------------------------------------------
+# -- SpinTool ----------------------------------------------------------------
 
 msgid "[LARIC]: Starting rotation of {angle}°..."
 msgstr ""
@@ -113,9 +117,7 @@ msgstr ""
 msgid "[LARIC]: Error - Spin timed out."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# MoveTool
-# ----------------------------------------------------------------------------
+# -- MoveTool ----------------------------------------------------------------
 
 msgid "forward"
 msgstr ""
@@ -138,9 +140,7 @@ msgstr ""
 msgid "[LARIC]: Error - Movement timed out."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# SequenceTool
-# ----------------------------------------------------------------------------
+# -- SequenceTool ------------------------------------------------------------
 
 msgid "[LARIC]: Starting sequence of {n} steps..."
 msgstr ""
@@ -168,9 +168,7 @@ msgstr ""
 msgid "[LARIC]: Sequence completed successfully."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# NavigationTool
-# ----------------------------------------------------------------------------
+# -- NavigationTool ----------------------------------------------------------
 
 msgid "coordinates ({x:.2f}, {y:.2f})"
 msgstr ""
@@ -200,9 +198,37 @@ msgstr ""
 msgid "[LARIC]: Error - Navigation to {dest} timed out (3 min)."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# GestureTool
-# ----------------------------------------------------------------------------
+# -- NavigationSequenceTool (patrol) -----------------------------------------
+
+msgid ""
+"[LARIC]: Error - No valid locations provided. You can ask for the known "
+"locations."
+msgstr ""
+
+msgid ""
+"[LARIC]: Error - Unknown location(s) in the patrol: {locs}. You can ask for "
+"the known locations."
+msgstr ""
+
+msgid "[LARIC]: Starting patrol of {n} locations: {locs}."
+msgstr ""
+
+msgid "[LARIC]: Patrol aborted between waypoints."
+msgstr ""
+
+msgid "[LARIC]: Waypoint {i}/{n}: {dest}."
+msgstr ""
+
+msgid "[LARIC]: Patrol interrupted at waypoint {i}."
+msgstr ""
+
+msgid "[LARIC]: Reached waypoint. Pausing {secs:.0f} s before the next one..."
+msgstr ""
+
+msgid "[LARIC]: Patrol completed successfully."
+msgstr ""
+
+# -- GestureTool -------------------------------------------------------------
 
 msgid "[LARIC]: (Negation gesture) Request not executable. Reason: {reason}"
 msgstr ""
@@ -213,16 +239,12 @@ msgstr ""
 msgid "[LARIC]: Error - Couldn't execute the negation gesture."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# StopTool
-# ----------------------------------------------------------------------------
+# -- StopTool ----------------------------------------------------------------
 
 msgid "[LARIC]: Stop activated. All motion halted."
 msgstr ""
 
-# ----------------------------------------------------------------------------
-# Agent main() — system lifecycle
-# ----------------------------------------------------------------------------
+# -- Agent main() — system lifecycle -----------------------------------------
 
 msgid "[SYSTEM]: Starting LARIC Agent..."
 msgstr ""
@@ -278,4 +300,143 @@ msgstr ""
 msgid ""
 "[SYSTEM]: ERROR - Groq selected (is_from_lab=False) but GROQ_API_KEY is not "
 "set. Export it, or switch to the lab Ollama (is_from_lab=True)."
+msgstr ""
+
+# ============================================================================
+# agent_logic.py — spoken phrases (TTS, /laric_voice). Short, plain sentences
+# read aloud by the HMI. Kept separate from the bracketed log strings above.
+# ============================================================================
+
+msgid "The robot is not localised. Set its initial pose on the map, then retry."
+msgstr ""
+
+msgid ""
+"Another action is in progress. Wait for it to complete or abort the current "
+"action before issuing a new command."
+msgstr ""
+
+msgid "Turning {angle} degrees."
+msgstr ""
+
+msgid "Rotation cancelled."
+msgstr ""
+
+msgid "Rotation completed."
+msgstr ""
+
+msgid "Rotation could not be completed."
+msgstr ""
+
+msgid "The rotation timed out."
+msgstr ""
+
+msgid "Moving {dist:.2f} meters {direction}."
+msgstr ""
+
+msgid "Movement cancelled."
+msgstr ""
+
+msgid "Movement completed."
+msgstr ""
+
+msgid "Movement could not be completed."
+msgstr ""
+
+msgid "The movement timed out."
+msgstr ""
+
+msgid "Starting sequence of {n} steps."
+msgstr ""
+
+msgid "Sequence aborted between steps."
+msgstr ""
+
+msgid "Unknown action at step {i}."
+msgstr ""
+
+msgid "Sequence interrupted at step {i}."
+msgstr ""
+
+msgid "Sequence completed."
+msgstr ""
+
+msgid "Location not found among the known locations."
+msgstr ""
+
+msgid "No valid destination set."
+msgstr ""
+
+msgid "Heading to {dest}."
+msgstr ""
+
+msgid "Destination reached."
+msgstr ""
+
+msgid "I could not reach the destination."
+msgstr ""
+
+msgid "Navigation cancelled."
+msgstr ""
+
+msgid "Navigation timed out."
+msgstr ""
+
+msgid "No valid locations provided."
+msgstr ""
+
+msgid "Some locations are unknown."
+msgstr ""
+
+msgid "Starting patrol."
+msgstr ""
+
+msgid "Patrol aborted."
+msgstr ""
+
+msgid "Patrol stopped."
+msgstr ""
+
+msgid "Waypoint reached."
+msgstr ""
+
+msgid "Patrol complete."
+msgstr ""
+
+msgid "I cannot fulfill the request."
+msgstr ""
+
+msgid "Gesture interrupted."
+msgstr ""
+
+msgid "I could not do the gesture."
+msgstr ""
+
+msgid "Stopping."
+msgstr ""
+
+msgid "Starting up."
+msgstr ""
+
+msgid "Missing API key."
+msgstr ""
+
+msgid "Command received. Thinking."
+msgstr ""
+
+msgid "Something went wrong."
+msgstr ""
+
+msgid "Subscription failed."
+msgstr ""
+
+msgid "Robot localised and ready for commands."
+msgstr ""
+
+msgid "Emergency stop activated."
+msgstr ""
+
+msgid "Agent ready. Set the initial pose on the map."
+msgstr ""
+
+msgid "Shutting down."
 msgstr ""

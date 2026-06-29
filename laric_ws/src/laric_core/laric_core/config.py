@@ -27,8 +27,8 @@ import os
 # is_real_robot : False = Gazebo simulation, True = real Husarion ROSbot.
 #                 (is_real_robot is independent of is_from_lab: one selects the
 #                 robot environment, the other the LLM endpoint.)
-is_from_lab:   bool = True
-is_real_robot: bool = True
+is_from_lab:   bool = False
+is_real_robot: bool = False
 
 
 # ==============================================================================
@@ -88,6 +88,10 @@ NAV_POLL_INTERVAL_S: float = 0.5
 
 # Maximum time to wait for a navigation goal to finish (seconds).
 NAV_TIMEOUT_S: float = 180.0
+
+# Dwell time at each waypoint of a multi-location patrol before the robot
+# proceeds to the next one (seconds).
+PATROL_DWELL_S: float = 2.0
 
 # Seconds after agent startup during which a retained/stale /initialpose is
 # ignored, so a restart does not inherit a previous session's localisation.
@@ -164,6 +168,7 @@ KNOWN_LOCATIONS: dict = (
 #   move_robot          -> MoveTool.name
 #   execute_sequence    -> SequenceTool.name
 #   navigate_to_location -> NavigationTool.name
+#   navigate_sequence   -> NavigationSequenceTool.name
 #   negation_gesture    -> GestureTool.name
 #   stop_robot          -> StopTool.name
 
@@ -232,9 +237,26 @@ TOOL SELECTION RULES
    (to stop), NOT the preposition "for". Always treat it as a stop command.
 
 5. AUTONOMOUS NAVIGATION → Call `navigate_to_location`
-   Intent : travelling to a known semantic destination (a room, a waypoint).
+   Intent : travelling to a SINGLE known semantic destination (a room, a
+            waypoint).
    Schema : location_name (must match an entry in the known locations map).
    Known locations: __LOCATIONS_LIST__.
+   CRITICAL: use this ONLY when the user names exactly ONE destination. If the
+             user names TWO OR MORE locations, use `navigate_sequence` instead.
+
+6. MULTI-LOCATION PATROL → Call `navigate_sequence`
+   Intent : visiting TWO OR MORE known semantic locations in order.
+   Schema : locations (an ORDERED list; every entry must match a known
+            location).
+   Known locations: __LOCATIONS_LIST__.
+   CRITICAL: this rule chains NAMED LOCATIONS. Do NOT confuse it with rule 3
+             (`execute_sequence`), which chains primitive MOTIONS (distances /
+             angles, e.g. "advance 1 m and then turn 90 degrees").
+   Map each named place to the closest entry in the known locations list, just
+   as for `navigate_to_location`.
+   Example:
+     "go to the entrance and then the bathroom"
+       → locations = ["entrance", "bathroom"]
 
 6. IMPOSSIBLE / UNKNOWN → Call `negation_gesture`
    Intent : requests that exceed the physical capabilities of a wheeled

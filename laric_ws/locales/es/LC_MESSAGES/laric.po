@@ -5,19 +5,18 @@ msgid ""
 msgstr ""
 "Project-Id-Version: LARIC\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-05-26 12:00+0200\n"
-"PO-Revision-Date: 2026-05-26 12:00+0200\n"
+"POT-Creation-Date: 2026-06-29 12:00+0200\n"
+"PO-Revision-Date: 2026-06-29 12:00+0200\n"
 "Last-Translator: \n"
 "Language-Team: \n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 3.9\n"
 
-# ----------------------------------------------------------------------------
-# laric_interface.py
-# ----------------------------------------------------------------------------
+# ============================================================================
+# laric_interface.py — HMI labels, status and log messages (display only)
+# ============================================================================
 
 msgid "LARIC - Voice & Text Interface"
 msgstr "LARIC - Interfaz de voz y texto"
@@ -30,6 +29,12 @@ msgstr "Escribe un comando y pulsa Intro..."
 
 msgid "EMERGENCY STOP (Ctrl+E)"
 msgstr "PARADA DE EMERGENCIA (Ctrl+E)"
+
+msgid "[SYSTEM] Voice muted."
+msgstr "[SISTEMA] Voz silenciada."
+
+msgid "[SYSTEM] Voice unmuted."
+msgstr "[SISTEMA] Voz reactivada."
 
 msgid "[SYSTEM] Language changed."
 msgstr "[SISTEMA] Idioma cambiado."
@@ -76,9 +81,11 @@ msgstr "[ERROR] Falló la petición a la API Google STT: {}"
 msgid "[ERROR] Unexpected error during audio processing: {}"
 msgstr "[ERROR] Error inesperado durante el procesamiento de audio: {}"
 
-# ----------------------------------------------------------------------------
-# agent_logic.py — common errors
-# ----------------------------------------------------------------------------
+# ============================================================================
+# agent_logic.py — operator-facing log messages (display, /robot_feedback)
+# ============================================================================
+
+# -- Common errors -----------------------------------------------------------
 
 msgid ""
 "[LARIC]: Error - The robot is not localised. Set its initial pose on the map, "
@@ -94,9 +101,7 @@ msgstr ""
 "[LARIC]: Error - Hay otra acción en curso. Espera a que termine o usa "
 "'stop_robot' para abortarla antes de enviar un nuevo comando."
 
-# ----------------------------------------------------------------------------
-# SpinTool
-# ----------------------------------------------------------------------------
+# -- SpinTool ----------------------------------------------------------------
 
 msgid "[LARIC]: Starting rotation of {angle}°..."
 msgstr "[LARIC]: Iniciando rotación de {angle}°..."
@@ -113,9 +118,7 @@ msgstr "[LARIC]: No se pudo completar la rotación. Obstáculo detectado."
 msgid "[LARIC]: Error - Spin timed out."
 msgstr "[LARIC]: Error - Tiempo de espera agotado durante la rotación."
 
-# ----------------------------------------------------------------------------
-# MoveTool
-# ----------------------------------------------------------------------------
+# -- MoveTool ----------------------------------------------------------------
 
 msgid "forward"
 msgstr "hacia adelante"
@@ -138,9 +141,7 @@ msgstr "[LARIC]: No se pudo completar el movimiento. Obstáculo detectado."
 msgid "[LARIC]: Error - Movement timed out."
 msgstr "[LARIC]: Error - Tiempo de espera agotado durante el movimiento."
 
-# ----------------------------------------------------------------------------
-# SequenceTool
-# ----------------------------------------------------------------------------
+# -- SequenceTool ------------------------------------------------------------
 
 msgid "[LARIC]: Starting sequence of {n} steps..."
 msgstr "[LARIC]: Iniciando secuencia de {n} pasos..."
@@ -170,9 +171,7 @@ msgstr "[LARIC]: Secuencia interrumpida en el paso {i}."
 msgid "[LARIC]: Sequence completed successfully."
 msgstr "[LARIC]: Secuencia completada con éxito."
 
-# ----------------------------------------------------------------------------
-# NavigationTool
-# ----------------------------------------------------------------------------
+# -- NavigationTool ----------------------------------------------------------
 
 msgid "coordinates ({x:.2f}, {y:.2f})"
 msgstr "las coordenadas ({x:.2f}, {y:.2f})"
@@ -206,9 +205,41 @@ msgstr "[LARIC]: Error - No se pudo llegar a {dest}. Nav2 ha abortado."
 msgid "[LARIC]: Error - Navigation to {dest} timed out (3 min)."
 msgstr "[LARIC]: Error - La navegación a {dest} agotó el tiempo (3 min)."
 
-# ----------------------------------------------------------------------------
-# GestureTool
-# ----------------------------------------------------------------------------
+# -- NavigationSequenceTool (patrol) -----------------------------------------
+
+msgid ""
+"[LARIC]: Error - No valid locations provided. You can ask for the known "
+"locations."
+msgstr ""
+"[LARIC]: Error - No se proporcionaron ubicaciones válidas. Puedes preguntar "
+"por las ubicaciones conocidas."
+
+msgid ""
+"[LARIC]: Error - Unknown location(s) in the patrol: {locs}. You can ask for "
+"the known locations."
+msgstr ""
+"[LARIC]: Error - Ubicación(es) desconocida(s) en la ruta: {locs}. Puedes "
+"preguntar por las ubicaciones conocidas."
+
+msgid "[LARIC]: Starting patrol of {n} locations: {locs}."
+msgstr "[LARIC]: Iniciando ruta de {n} ubicaciones: {locs}."
+
+msgid "[LARIC]: Patrol aborted between waypoints."
+msgstr "[LARIC]: Ruta abortada entre puntos."
+
+msgid "[LARIC]: Waypoint {i}/{n}: {dest}."
+msgstr "[LARIC]: Punto {i}/{n}: {dest}."
+
+msgid "[LARIC]: Patrol interrupted at waypoint {i}."
+msgstr "[LARIC]: Ruta interrumpida en el punto {i}."
+
+msgid "[LARIC]: Reached waypoint. Pausing {secs:.0f} s before the next one..."
+msgstr "[LARIC]: Punto alcanzado. Pausando {secs:.0f} s antes del siguiente..."
+
+msgid "[LARIC]: Patrol completed successfully."
+msgstr "[LARIC]: Ruta completada con éxito."
+
+# -- GestureTool -------------------------------------------------------------
 
 msgid "[LARIC]: (Negation gesture) Request not executable. Reason: {reason}"
 msgstr "[LARIC]: (Gesto de negación) Solicitud no ejecutable. Motivo: {reason}"
@@ -219,16 +250,12 @@ msgstr "[LARIC]: Gesto interrumpido."
 msgid "[LARIC]: Error - Couldn't execute the negation gesture."
 msgstr "[LARIC]: Error - No se pudo ejecutar el gesto de negación."
 
-# ----------------------------------------------------------------------------
-# StopTool
-# ----------------------------------------------------------------------------
+# -- StopTool ----------------------------------------------------------------
 
 msgid "[LARIC]: Stop activated. All motion halted."
 msgstr "[LARIC]: Parada activada. Todos los movimientos detenidos."
 
-# ----------------------------------------------------------------------------
-# Agent main() — system lifecycle
-# ----------------------------------------------------------------------------
+# -- Agent main() — system lifecycle -----------------------------------------
 
 msgid "[SYSTEM]: Starting LARIC Agent..."
 msgstr "[SISTEMA]: Iniciando el Agente LARIC..."
@@ -290,3 +317,144 @@ msgid ""
 msgstr ""
 "[SISTEMA]: ERROR - Groq seleccionado (is_from_lab=False) pero GROQ_API_KEY no "
 "está definida. Expórtala, o cambia al Ollama del laboratorio (is_from_lab=True)."
+
+# ============================================================================
+# agent_logic.py — spoken phrases (TTS, /laric_voice). Short, plain sentences
+# read aloud by the HMI. Kept separate from the bracketed log strings above.
+# ============================================================================
+
+msgid "The robot is not localised. Set its initial pose on the map, then retry."
+msgstr "El robot no está localizado. Fija su pose inicial en el mapa y vuelve a intentarlo."
+
+msgid ""
+"Another action is in progress. Wait for it to complete or abort the current "
+"action before issuing a new command."
+msgstr ""
+"Hay otra acción en curso. Espera a que termine o abórtala antes de enviar un "
+"nuevo comando."
+
+msgid "Turning {angle} degrees."
+msgstr "Girando {angle} grados."
+
+msgid "Rotation cancelled."
+msgstr "Rotación cancelada."
+
+msgid "Rotation completed."
+msgstr "Rotación completada."
+
+msgid "Rotation could not be completed."
+msgstr "No se pudo completar la rotación."
+
+msgid "The rotation timed out."
+msgstr "Se agotó el tiempo de la rotación."
+
+msgid "Moving {dist:.2f} meters {direction}."
+msgstr "Moviendo {dist:.2f} metros {direction}."
+
+msgid "Movement cancelled."
+msgstr "Movimiento cancelado."
+
+msgid "Movement completed."
+msgstr "Movimiento completado."
+
+msgid "Movement could not be completed."
+msgstr "No se pudo completar el movimiento."
+
+msgid "The movement timed out."
+msgstr "Se agotó el tiempo del movimiento."
+
+msgid "Starting sequence of {n} steps."
+msgstr "Iniciando secuencia de {n} pasos."
+
+msgid "Sequence aborted between steps."
+msgstr "Secuencia abortada entre pasos."
+
+msgid "Unknown action at step {i}."
+msgstr "Acción desconocida en el paso {i}."
+
+msgid "Sequence interrupted at step {i}."
+msgstr "Secuencia interrumpida en el paso {i}."
+
+msgid "Sequence completed."
+msgstr "Secuencia completada."
+
+msgid "Location not found among the known locations."
+msgstr "Ubicación no encontrada entre las ubicaciones conocidas."
+
+msgid "No valid destination set."
+msgstr "No se ha indicado un destino válido."
+
+msgid "Heading to {dest}."
+msgstr "Voy hacia {dest}."
+
+msgid "Destination reached."
+msgstr "Destino alcanzado."
+
+msgid "I could not reach the destination."
+msgstr "No he podido llegar al destino."
+
+msgid "Navigation cancelled."
+msgstr "Navegación cancelada."
+
+msgid "Navigation timed out."
+msgstr "Se agotó el tiempo de la navegación."
+
+msgid "No valid locations provided."
+msgstr "No se proporcionaron ubicaciones válidas."
+
+msgid "Some locations are unknown."
+msgstr "Hay ubicaciones desconocidas."
+
+msgid "Starting patrol."
+msgstr "Iniciando ruta."
+
+msgid "Patrol aborted."
+msgstr "Ruta abortada."
+
+msgid "Patrol stopped."
+msgstr "Ruta detenida."
+
+msgid "Waypoint reached."
+msgstr "Punto alcanzado."
+
+msgid "Patrol complete."
+msgstr "Ruta completada."
+
+msgid "I cannot fulfill the request."
+msgstr "No puedo cumplir la solicitud."
+
+msgid "Gesture interrupted."
+msgstr "Gesto interrumpido."
+
+msgid "I could not do the gesture."
+msgstr "No he podido hacer el gesto."
+
+msgid "Stopping."
+msgstr "Deteniéndome."
+
+msgid "Starting up."
+msgstr "Iniciando."
+
+msgid "Missing API key."
+msgstr "Falta la clave de API."
+
+msgid "Command received. Thinking."
+msgstr "Comando recibido. Pensando."
+
+msgid "Something went wrong."
+msgstr "Algo ha salido mal."
+
+msgid "Subscription failed."
+msgstr "Fallo en la suscripción."
+
+msgid "Robot localised and ready for commands."
+msgstr "Robot localizado y listo para recibir comandos."
+
+msgid "Emergency stop activated."
+msgstr "Parada de emergencia activada."
+
+msgid "Agent ready. Set the initial pose on the map."
+msgstr "Agente listo. Fija la pose inicial en el mapa."
+
+msgid "Shutting down."
+msgstr "Apagando."

@@ -23,6 +23,11 @@ ROS 2 topics produced:
                                            log; every message is wrapped with
                                            i18n._() so the language follows
                                            the active catalog.
+  /laric_voice        (std_msgs/String)  - short spoken phrase for the HMI to
+                                           read aloud via text-to-speech. The
+                                           full text still goes to
+                                           /robot_feedback; this is only the
+                                           concise version that is spoken.
 
 Internationalisation:
   All operator-facing strings flow through 'i18n._()'. The translator is
@@ -110,6 +115,7 @@ from config import (
     POLL_INTERVAL_S,
     NAV_POLL_INTERVAL_S,
     NAV_TIMEOUT_S,
+    PATROL_DWELL_S,
     INITIALPOSE_GRACE_S,
     GESTURE_ANGULAR_VEL_RAD_S,
     GESTURE_WARMUP_DURATION_S,
@@ -277,6 +283,28 @@ class NavigationInput(BaseModel):
     )
 
 
+class NavigationSequenceInput(BaseModel):
+    """
+    Input schema for NavigationSequenceTool (ordered multi-location patrol).
+
+    Attributes:
+        locations: Ordered list of semantic location names to visit. Each entry
+            must match a key in 'KNOWN_LOCATIONS'. The robot navigates to each
+            in turn, pausing briefly on arrival before continuing.
+    """
+
+    locations: List[str] = Field(
+        description=(
+            "Ordered list of semantic location names to visit, one after "
+            "another (a patrol/surveillance route). "
+            f"Each entry must match one of: {list(KNOWN_LOCATIONS.keys())}. "
+            "Map the user's words to the closest entries and convert to "
+            "lowercase. Use this whenever the user names two or more "
+            "destinations; use navigate_to_location for a single destination."
+        )
+    )
+    
+
 class TriggerInput(BaseModel):
     """
     Minimal input schema for parameter-free tools.
@@ -391,7 +419,9 @@ class SpinTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
@@ -402,7 +432,10 @@ class SpinTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
                   "Please wait for it to complete or use 'stop_robot' to "
-                  "abort it before issuing a new command.")
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -417,7 +450,9 @@ class SpinTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Starting rotation of {angle}°...")
-                .format(angle=angle)
+                .format(angle=angle),
+                voice=_("Turning {angle:.0f} degrees.")
+                .format(angle=angle),
             )
 
             # 2. Build the Nav2 Spin goal
@@ -479,7 +514,8 @@ class SpinTool(BaseTool):
                     self.connector.terminate_action(handle)
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Rotation cancelled.")
+                        _("[LARIC]: Rotation cancelled."),
+                        voice=_("Rotation cancelled.")
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
@@ -494,13 +530,15 @@ class SpinTool(BaseTool):
                 if "SUCCESS" in result_container["text"]:
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Rotation completed successfully.")
+                        _("[LARIC]: Rotation completed successfully."),
+                        voice=_("Rotation completed.")
                     )
                 else:
                     _publish_feedback(
                         self.connector,
                         _("[LARIC]: Rotation could not be completed. "
-                          "Obstacle detected.")
+                          "Obstacle detected."),
+                        voice=_("Rotation could not be completed.")
                     )
                 return result_container["text"]
             else:
@@ -508,7 +546,8 @@ class SpinTool(BaseTool):
                 self.connector.terminate_action(handle)
                 _publish_feedback(
                     self.connector,
-                    _("[LARIC]: Error - Spin timed out.")
+                    _("[LARIC]: Error - Spin timed out."),
+                    voice=_("The rotation timed out.")
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for spin. "
@@ -521,7 +560,9 @@ class SpinTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 f"ERROR: Critical Nav2 exception in SpinTool: {exc}. "
@@ -619,7 +660,9 @@ class MoveTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
@@ -632,7 +675,10 @@ class MoveTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
                   "Please wait for it to complete or use 'stop_robot' to "
-                  "abort it before issuing a new command.")
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -656,7 +702,9 @@ class MoveTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Moving {dist:.2f} m {direction} "
                   "at {speed:.2f} m/s...")
-                .format(dist=dist_abs, direction=direction_label, speed=speed)
+                .format(dist=dist_abs, direction=direction_label, speed=speed),
+                voice=(_("Moving {dist:.2f} meters {direction}.")
+                .format(dist=dist_abs, direction=direction_label, speed=speed))
             )
 
             timeout_float = _compute_move_allowance(dist_abs, speed)
@@ -725,7 +773,8 @@ class MoveTool(BaseTool):
                     self.connector.terminate_action(handle)
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Movement cancelled.")
+                        _("[LARIC]: Movement cancelled."),
+                        voice=_("Movement cancelled.")
                     )
                     return (
                         "ACTION ABORTED. The user stopped the robot. "
@@ -740,20 +789,23 @@ class MoveTool(BaseTool):
                 if "SUCCESS" in result_container["text"]:
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Movement completed successfully.")
+                        _("[LARIC]: Movement completed successfully."),
+                        voice=_("Movement completed.")
                     )
                 else:
                     _publish_feedback(
                         self.connector,
                         _("[LARIC]: Movement could not be completed. "
-                          "Obstacle detected.")
+                          "Obstacle detected."),
+                        voice=_("Movement could not be completed.")
                     )
                 return result_container["text"]
             else:
                 self.connector.terminate_action(handle)
                 _publish_feedback(
                     self.connector,
-                    _("[LARIC]: Error - Movement timed out.")
+                    _("[LARIC]: Error - Movement timed out."),
+                    voice=_("The movement timed out.")
                 )
                 return (
                     f"ERROR: Timeout of {timeout:.1f}s reached for movement. "
@@ -764,7 +816,9 @@ class MoveTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 f"ERROR: Critical Nav2 exception in MoveTool: {exc}. "
@@ -869,7 +923,9 @@ class SequenceTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
@@ -880,7 +936,10 @@ class SequenceTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
                   "Please wait for it to complete or use 'stop_robot' to "
-                  "abort it before issuing a new command.")
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -898,6 +957,8 @@ class SequenceTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Starting sequence of {n} steps...")
+                .format(n=len(parsed_steps)),
+                voice=_("Starting sequence of {n} steps.")
                 .format(n=len(parsed_steps))
             )
 
@@ -908,7 +969,8 @@ class SequenceTool(BaseTool):
                 if self.abort_event.is_set():
                     _publish_feedback(
                         self.connector,
-                        _("[LARIC]: Sequence aborted between steps.")
+                        _("[LARIC]: Sequence aborted between steps."),
+                        voice=_("Sequence aborted between steps.")
                     )
                     return (
                         "ACTION ABORTED. Sequence halted by user. "
@@ -943,6 +1005,8 @@ class SequenceTool(BaseTool):
                         self.connector,
                         _("[LARIC]: Error - Unknown action type '{action}' at "
                           "step {i}. Valid types are 'move' and 'spin'.")
+                        .format(action=step.action, i=index + 1),
+                        voice=_("Unknown action at step {i}.")
                         .format(action=step.action, i=index + 1)
                     )
                     return (
@@ -956,6 +1020,8 @@ class SequenceTool(BaseTool):
                     _publish_feedback(
                         self.connector,
                         _("[LARIC]: Sequence interrupted at step {i}.")
+                        .format(i=index + 1),
+                        voice=_("Sequence interruptedat step {i}.")
                         .format(i=index + 1)
                     )
                     return (
@@ -968,7 +1034,8 @@ class SequenceTool(BaseTool):
 
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Sequence completed successfully.")
+                _("[LARIC]: Sequence completed successfully."),
+                voice=_("Sequence completed.")
             )
             return (
                 "SUCCESS. All sequence steps executed successfully. "
@@ -1056,7 +1123,8 @@ class NavigationTool(BaseTool):
         location_name: str = "",
         target_x: Optional[float] = None,
         target_y: Optional[float] = None,
-        target_yaw: float = 0.0
+        target_yaw: float = 0.0,
+        standalone: bool = True
     ) -> str:
         """
         Resolves the destination and commands Nav2 to navigate there.
@@ -1067,6 +1135,9 @@ class NavigationTool(BaseTool):
             target_x: Explicit X coordinate in meters.
             target_y: Explicit Y coordinate in meters.
             target_yaw: Desired final heading in degrees.
+            standalone: True for a normal single command. False when invoked by 
+                NavigationSequenceTool, which owns the abort_event reset for the
+                whole patrol.
 
         Returns:
             A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
@@ -1077,7 +1148,9 @@ class NavigationTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - The robot is not localised. Set its "
-                  "initial pose on the map, then retry.")
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
             )
             return (
                 "ACTION FAILED. The robot is not localised. "
@@ -1090,7 +1163,10 @@ class NavigationTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
                   "Please wait for it to complete or use 'stop_robot' to "
-                  "abort it before issuing a new command.")
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -1114,7 +1190,8 @@ class NavigationTool(BaseTool):
                         _("[LARIC]: Error - The location '{loc}' was not found "
                           "in the semantic map of known locations. You can ask "
                           "for the known locations.")
-                        .format(loc=loc)
+                        .format(loc=loc),
+                        voice=_("Location not found among the known locations.")
                     )
                     return (
                         f"ERROR. The location '{loc}' was not found in "
@@ -1130,19 +1207,23 @@ class NavigationTool(BaseTool):
                 _publish_feedback(
                     self.connector,
                     _("[LARIC]: Error - No valid destination provided. You can "
-                      "ask for the known locations.")
+                      "ask for the known locations."),
+                    voice=_("No valid destination set.")
                 )
                 return (
                     "ERROR. No valid destination provided. "
                     "DO NOT CALL ANY OTHER TOOLS."
                 )
 
-            self.abort_event.clear()
+            if standalone:
+                self.abort_event.clear()
 
             # 2. Announce intent
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Navigating to {dest}...").format(dest=dest_label)
+                _("[LARIC]: Navigating to {dest}...").format(dest=dest_label),
+                voice=(_("Heading to {dest}.")
+                       .format(dest=dest_label) if standalone else None)
             )
 
             try: 
@@ -1154,7 +1235,9 @@ class NavigationTool(BaseTool):
                 _publish_feedback(
                     self.connector,
                     _("[LARIC]: Error - The robot is not localised. Set its "
-                      "initial pose on the map, then retry.")
+                      "initial pose on the map, then retry."),
+                    voice=_("The robot is not localised. Set its initial pose "
+                            "on the map, then retry.")
                 )
                 return (
                     f"ERROR. Failed to send navigation goal: {exc}. "
@@ -1174,7 +1257,8 @@ class NavigationTool(BaseTool):
                     _publish_feedback(
                         self.connector,
                         _("[LARIC]: Navigation to {dest} cancelled.")
-                        .format(dest=dest_label)
+                        .format(dest=dest_label),
+                        voice=_("Navigation cancelled.")
                     )
                     return (
                         "ACTION ABORTED. User stopped the navigation. "
@@ -1190,7 +1274,9 @@ class NavigationTool(BaseTool):
                         _publish_feedback(
                             self.connector,
                             _("[LARIC]: Arrived at {dest}.")
-                            .format(dest=dest_label)
+                            .format(dest=dest_label),
+                            voice=(_("Destination reached.")
+                                   if standalone else None)
                         )
                         return (
                             f"SUCCESS. Arrived at {dest_label}. "
@@ -1205,7 +1291,8 @@ class NavigationTool(BaseTool):
                             self.connector,
                             _("[LARIC]: Error - Could not reach {dest}. "
                               "Nav2 aborted.")
-                            .format(dest=dest_label)
+                            .format(dest=dest_label),
+                            voice=_("I could not reach the destination.")
                         )
                         return (
                             "ACTION FAILED. Nav2 could not find or execute "
@@ -1224,13 +1311,231 @@ class NavigationTool(BaseTool):
             _publish_feedback(
                 self.connector,
                 _("[LARIC]: Error - Navigation to {dest} timed out (3 min).")
-                .format(dest=dest_label)
+                .format(dest=dest_label),
+                voice=_("Navigation timed out.")
             )
             return (
                 "ERROR: Navigation timeout (3 minutes). "
                 "DO NOT CALL ANY OTHER TOOLS."
             )
         
+        finally:
+            self.motion_lock.release()
+
+
+# ------------------------------------------------------------------------------
+
+class NavigationSequenceTool(BaseTool):
+    """
+    Visits an ordered list of known semantic locations (a patrol route).
+
+    Attributes:
+        name: LangChain tool identifier. Must match the name in 'SYSTEM_PROMPT'.
+        description: Read by the LLM to decide when to invoke this tool.
+        args_schema: Pydantic model validating input.
+        connector: Active 'ROS2Connector' instance.
+        abort_event: Shared 'threading.Event'; cleared once here and observed
+            by each leg so 'StopTool' can interrupt the route.
+        motion_lock: Shared (reentrant) 'threading.RLock'; held for the whole
+            route so no other command interleaves between legs.
+        localised_event: Shared 'threading.Event'; checked once here.
+        _nav_tool: Internal 'NavigationTool' that executes each individual leg
+            with standalone=False.
+    """
+
+    name: str = "navigate_sequence"
+    description: str = (
+        "Visits MULTIPLE known semantic locations in order. "
+        f"Available semantic locations: {list(KNOWN_LOCATIONS.keys())}. "
+        "Use instead of navigate_to_location whenever the user names two or "
+        "more destinations (e.g., 'go to the entrance and then to the "
+        "bathroom.'). "
+        "Nav2 MUST be localised before calling."
+    )
+    args_schema: Type[BaseModel] = NavigationSequenceInput
+    return_direct: bool = True
+
+    connector:       Any = None
+    abort_event:     Any = None
+    motion_lock:     Any = None
+    localised_event: Any = None
+    _nav_tool:       Any = None
+
+    def __init__(
+        self,
+        connector: ROS2Connector,
+        abort_event: threading.Event,
+        motion_lock: threading.Lock,
+        localised_event: threading.Event,
+        **kwargs,
+    ) -> None:
+        """
+        Initialises NavigationSequenceTool and its internal NavigationTool.
+
+        Args:
+            connector: Active 'ROS2Connector'.
+            abort_event: Threading event to signal abort requests.
+            motion_lock: Threading lock to synchronize motion commands.
+            localised_event: Threading event to signal localisation status.
+            **kwargs: Additional keyword arguments forwarded to 'BaseTool'.
+        """
+        super().__init__(**kwargs)
+        self.connector = connector
+        self.abort_event = abort_event
+        self.motion_lock = motion_lock
+        self.localised_event = localised_event
+        self._nav_tool = NavigationTool(
+            connector=connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        )
+
+    def _run(self, locations: List[str]) -> str:
+        """
+        Navigates through the given locations in order, pausing at each.
+
+        Args:
+            locations: Ordered list of semantic location names to visit.
+
+        Returns:
+            A status string prefixed with 'SUCCESS', 'ACTION ABORTED',
+            'ACTION FAILED', or 'ERROR'.
+        """
+        # 0. Preconditions, checked once for the whole route.
+        if not self.localised_event.is_set():
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - The robot is not localised. Set its "
+                  "initial pose on the map, then retry."),
+                voice=_("The robot is not localised. Set its initial pose on "
+                        "the map, then retry.")
+            )
+            return (
+                "ACTION FAILED. The robot is not localised. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+
+        # 1. Validate the whole route before moving, so the robot never drives
+        #    part of an invalid patrol.
+        if not locations:
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - No valid locations provided. You can ask "
+                  "for the known locations."),
+                voice=_("No valid locations provided.")
+            )
+            return (
+                "ERROR. No locations provided. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+
+        normalised = [str(loc).lower().strip() for loc in locations]
+        unknown = [loc for loc in normalised if loc not in KNOWN_LOCATIONS]
+        if unknown:
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - Unknown location(s) in the patrol: {locs}. "
+                  "You can ask for the known locations.")
+                .format(locs=", ".join(unknown)),
+                voice=_("Some locations are unknown.")
+            )
+            return (
+                f"ERROR. Unknown location(s) in the patrol: {unknown}. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+
+        if not self.motion_lock.acquire(blocking=False):
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Error - Another action is currently in progress. "
+                  "Please wait for it to complete or use 'stop_robot' to "
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
+            )
+            return (
+                "ACTION FAILED. Another action is currently in progress. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
+
+        try:
+            # Clear the abort flag ONCE for the whole route.
+            self.abort_event.clear()
+            n = len(normalised)
+
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Starting patrol of {n} locations: {locs}.")
+                .format(
+                    n=n,
+                    locs=", ".join(loc.replace('_', ' ') for loc in normalised)
+                ),
+                voice=_("Starting patrol.")
+            )
+
+            # 2. Visit each location in order.
+            for index, loc in enumerate(normalised):
+
+                if self.abort_event.is_set():
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Patrol aborted between waypoints."),
+                        voice=_("Patrol aborted.")
+                    )
+                    return (
+                        "ACTION ABORTED. Patrol halted by user. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+
+                _publish_feedback(
+                    self.connector,
+                    _("[LARIC]: Waypoint {i}/{n}: {dest}.")
+                    .format(i=index + 1, n=n, dest=loc.replace('_', ' '))
+                )
+
+                # Execute the leg.
+                result = self._nav_tool._run(
+                    location_name=loc, standalone=False
+                )
+
+                # Any non-success outcome halts the route.
+                if "SUCCESS" not in result:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Patrol interrupted at waypoint {i}.")
+                        .format(i=index + 1),
+                        voice=_("Patrol stopped.")
+                    )
+                    return (
+                        f"Patrol halted at waypoint {index + 1}: {result}. "
+                        "DO NOT CALL ANY OTHER TOOLS."
+                    )
+
+                # 3. Dwell on arrival before moving on.
+                if index < n - 1:
+                    _publish_feedback(
+                        self.connector,
+                        _("[LARIC]: Reached waypoint. Pausing {secs:.0f} s "
+                          "before the next one...").format(secs=PATROL_DWELL_S),
+                        voice=_("Waypoint reached.")
+                    )
+                    waited = 0.0
+                    while (waited < PATROL_DWELL_S
+                           and not self.abort_event.is_set()):
+                        time.sleep(POLL_INTERVAL_S)
+                        waited += POLL_INTERVAL_S
+
+            _publish_feedback(
+                self.connector,
+                _("[LARIC]: Patrol completed successfully."),
+                voice=_("Patrol complete.")
+            )
+            return (
+                "SUCCESS. Patrol completed: all locations visited. "
+                "DO NOT CALL ANY OTHER TOOLS."
+            )
         finally:
             self.motion_lock.release()
 
@@ -1304,7 +1609,10 @@ class GestureTool(BaseTool):
                 self.connector,
                 _("[LARIC]: Error - Another action is currently in progress. "
                   "Please wait for it to complete or use 'stop_robot' to "
-                  "abort it before issuing a new command.")
+                  "abort it before issuing a new command."),
+                voice=_("Another action is in progress. Wait for it to "
+                        "complete or abort the current action before issuing a "
+                        "new command.")
             )
             return (
                 "ACTION FAILED. Another action is currently in progress. "
@@ -1318,14 +1626,16 @@ class GestureTool(BaseTool):
                 self.connector,
                 _("[LARIC]: (Negation gesture) Request not executable. "
                   "Reason: {reason}")
-                .format(reason=reason)
+                .format(reason=reason),
+                voice=_("I cannot fulfill the request.") 
             )
 
             # 2. Oscillation pattern: alternating left/right angular velocity
             phases = [(+GESTURE_ANGULAR_VEL_RAD_S, GESTURE_WARMUP_DURATION_S)]
             for sign in (-1.0, +1.0, -1.0):
                 phases.append(
-                    (sign * GESTURE_ANGULAR_VEL_RAD_S, GESTURE_OSCILLATION_DURATION_S)
+                    (sign * GESTURE_ANGULAR_VEL_RAD_S, 
+                     GESTURE_OSCILLATION_DURATION_S)
                 )
 
             for angular_z, duration in phases:
@@ -1343,7 +1653,8 @@ class GestureTool(BaseTool):
 
             if self.abort_event.is_set():
                 _publish_feedback(
-                    self.connector, _("[LARIC]: Gesture interrupted.")
+                    self.connector, _("[LARIC]: Gesture interrupted."),
+                    voice=_("Gesture interrupted.")
                 )
                 return (
                     "ACTION ABORTED.  "
@@ -1360,7 +1671,8 @@ class GestureTool(BaseTool):
             # state cleanup is required here.
             _publish_feedback(
                 self.connector,
-                _("[LARIC]: Error - Couldn't execute the negation gesture.")
+                _("[LARIC]: Error - Couldn't execute the negation gesture."),
+                voice=_("I could not do the gesture.")
             )
             return (
                 f"ERROR executing gesture: {exc}. "
@@ -1451,7 +1763,8 @@ class StopTool(BaseTool):
 
         _publish_feedback(
             self.connector,
-            _("[LARIC]: Stop activated. All motion halted.")
+            _("[LARIC]: Stop activated. All motion halted."),
+            voice=_("Stopping.")
         )
         return (
             "SUCCESS. Stop activated. All Nav2 goals cancelled. "
@@ -1463,13 +1776,19 @@ class StopTool(BaseTool):
 # UTILITY FUNCTIONS
 # ==============================================================================
 
-def _publish_feedback(connector: ROS2Connector, message: str) -> None:
+def _publish_feedback(
+    connector: ROS2Connector,
+    message: str,
+    voice: Optional[str] = None,
+) -> None:
     """
-    Publishes a status message to the '/robot_feedback' ROS 2 topic.
+    Publishes a status message to the '/robot_feedback' ROS 2 topic, and a short
+    spoken phrase to /laric_voice for text-to-speech.
 
     Args:
         connector: Active 'ROS2Connector' instance.
-        message: Plaintext status message to publish.
+        message: Plaintext status message shown in the HMI log.
+        voice: Short phrase to speak via TTS. It follows the active language.
     """
     try:
         connector.send_message(
@@ -1479,6 +1798,16 @@ def _publish_feedback(connector: ROS2Connector, message: str) -> None:
         )
     except Exception:
         pass
+    
+    if voice:
+        try:
+            connector.send_message(
+                ROS2Message(payload={"data": voice}),
+                target="/laric_voice",
+                msg_type="std_msgs/msg/String"
+            )
+        except Exception:
+            pass
 
 
 def _publish_cmd_vel(
@@ -1577,7 +1906,11 @@ def main() -> None:
     # feedback message is sent.
     time.sleep(3.0)
 
-    _publish_feedback(ros_connector, _("[SYSTEM]: Starting LARIC Agent..."))
+    _publish_feedback(
+        ros_connector, 
+        _("[SYSTEM]: Starting LARIC Agent..."),
+        voice=_("Starting up.")
+    )
 
     # 2. Initialise the shared concurrency primitives. StopTool never holds
     #    motion_lock so it can always interrupt an in-progress motion.
@@ -1608,6 +1941,12 @@ def main() -> None:
             localised_event=localised_event,
         ),
         NavigationTool(
+            connector=ros_connector,
+            abort_event=abort_event,
+            motion_lock=motion_lock,
+            localised_event=localised_event,
+        ),
+        NavigationSequenceTool(
             connector=ros_connector,
             abort_event=abort_event,
             motion_lock=motion_lock,
@@ -1644,7 +1983,8 @@ def main() -> None:
                 ros_connector,
                 _("[SYSTEM]: ERROR - Groq selected (is_from_lab=False) but "
                   "GROQ_API_KEY is not set. Export it, or switch to the lab "
-                  "Ollama (is_from_lab=True).")
+                  "Ollama (is_from_lab=True)."),
+                voice=_("Missing API key.") 
             )
         llm = ChatGroq(
             temperature=0, 
@@ -1685,9 +2025,13 @@ def main() -> None:
 
         _publish_feedback(
             ros_connector,
-            _("[LARIC]: Heard: '{text}'").format(text=user_text)
+            _("[LARIC]: Heard: '{text}'").format(text=user_text),
         )
-        _publish_feedback(ros_connector, _("[LARIC]: Thinking..."))
+        _publish_feedback(
+            ros_connector, 
+            _("[LARIC]: Thinking..."),
+            voice=_("Command received. Thinking.")
+        )
 
         def think() -> None:
             """
@@ -1711,12 +2055,14 @@ def main() -> None:
                     formatted_response = response.replace("\n", "<br>")
                     _publish_feedback(
                         ros_connector, 
-                        f"[LARIC]: {formatted_response}"
+                        f"[LARIC]: {formatted_response}",
+                        voice=response
                     )
             except Exception as exc:
                 _publish_feedback(
                     ros_connector,
-                    _("[LARIC]: ERROR - {exc}").format(exc=exc)
+                    _("[LARIC]: ERROR - {exc}").format(exc=exc),
+                    voice=_("Something went wrong.")
                 )
 
         # Daemon threads are automatically joined when the main process exits.
@@ -1733,7 +2079,8 @@ def main() -> None:
         _publish_feedback(
             ros_connector,
             _("[SYSTEM]: Warning - Could not subscribe to /from_human: {exc}")
-            .format(exc=exc)
+            .format(exc=exc),
+            voice=_("Subscription failed.")
         )
 
     # 7. Initial pose listener for localisation detection
@@ -1752,7 +2099,8 @@ def main() -> None:
         localised_event.set()
         _publish_feedback(
             ros_connector,
-            _("[LARIC]: Robot localised. Ready for commands.")
+            _("[LARIC]: Robot localised. Ready for commands."),
+            voice=_("Robot localised and ready for commands.")
         )
 
     try:
@@ -1766,7 +2114,8 @@ def main() -> None:
         _publish_feedback(
             ros_connector,
             _("[SYSTEM]: Warning - Could not subscribe to /initialpose: {exc}")
-            .format(exc=exc)
+            .format(exc=exc),
+            voice=_("Subscription failed.")
         )
 
     # 8. Hardware Emergency Stop Listener 
@@ -1782,7 +2131,8 @@ def main() -> None:
         if msg.payload.data:
             _publish_feedback(
                 ros_connector,
-                _("[LARIC]: EMERGENCY STOP ACTIVATED.")
+                _("[LARIC]: EMERGENCY STOP ACTIVATED."),
+                voice=_("Emergency stop activated.")
             )
             
             # Retrieve the StopTool instance from the tools list
@@ -1804,7 +2154,8 @@ def main() -> None:
             ros_connector,
             _("[SYSTEM]: Warning - Could not subscribe to "
               "/emergency_stop: {exc}")
-            .format(exc=exc)
+            .format(exc=exc),
+            voice=_("Subscription failed.")
         )
 
     # ----- /language_changed listener -----
@@ -1838,17 +2189,19 @@ def main() -> None:
             ros_connector,
             _("[SYSTEM]: Warning - Could not subscribe to "
               "/language_changed: {exc}")
-            .format(exc=exc)
+            .format(exc=exc),
+            voice=_("Subscription failed.")
         )
 
     _publish_feedback(
         ros_connector,
-        _("[LARIC]: Agent ready. Listening on /from_human.")
+        _("[LARIC]: Agent ready. Listening on /from_human."),
     )
     _publish_feedback(
         ros_connector,
         _("[LARIC]: IMPORTANT - Set the robot's initial pose on the map "
-          "before sending commands.")
+          "before sending commands."),
+        voice=_("Agent ready. Set the initial pose on the map.")
     )
 
     # 9. Keep-alive loop
@@ -1858,7 +2211,8 @@ def main() -> None:
     except KeyboardInterrupt:
         _publish_feedback(
             ros_connector,
-            _("[SYSTEM]: Shutting down LARIC Agent...")
+            _("[SYSTEM]: Shutting down LARIC Agent..."),
+            voice=_("Shutting down.")
         )
 
 

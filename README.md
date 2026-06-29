@@ -28,11 +28,9 @@ Switching between them needs no changes to the agent code — only the `is_real_
 LARIC-TFG/
 ├── README.md
 ├── docs/                            # Project documentation
-|   ├── images/architecture.svg      # System architecture diagram
+|   ├── images/architecture.svg
 │   ├── documentacion.pdf            # Full TFG report
-│   ├── bibliografia.pdf             # References / bibliography
 │   ├── glosario.pdf                 # Technical glossary
-│   ├── evolucion_proyecto.pdf       # Project evolution / history
 │   ├── manual_comandos.pdf          # Voice/text command reference
 │   ├── manual_configuracion.pdf     # Full installation guide (sim + real)
 │   └── manual_programacion.pdf      # Code walkthrough
@@ -73,6 +71,7 @@ LARIC-TFG/
 |---|---|---|
 | `/from_human` | HMI → Agent | User command text |
 | `/robot_feedback` | Agent → HMI | Status messages |
+| `/laric_voice` | Agent → HMI | Short spoken phrase (text-to-speech output) |
 | `/emergency_stop` | HMI → Agent | Hardware stop signal |
 | `/language_changed` | HMI → Agent | Active language code (keeps i18n in sync) |
 | `/initialpose` | RViz (sim) / Foxglove (real) → Agent | Localisation initialisation |
@@ -89,7 +88,7 @@ LARIC-TFG/
 | Navigation | Nav2 (Behavior Plugins + NavigateToPose) on a static map — AMCL (sim) · Husarion navigation snap with SLAM off (real) |
 | AI Framework | [RAI by Robotec AI](https://github.com/RobotecAI/rai) (modified fork) + LangChain |
 | LLM | Llama 3.3 70B via Groq API or local Ollama (ai2 UPV) |
-| HMI | PyQt5 + Google Speech Recognition |
+| HMI | PyQt5 + Google Speech Recognition + gTTS (spoken feedback) |
 
 ---
 
@@ -97,7 +96,7 @@ LARIC-TFG/
 
 > **Full installation guide** for both the simulation and the real robot (VMware, Ubuntu, ROS 2, the RAI fork, networking, laric_env): see [`docs/manual_configuracion.pdf`](docs/manual_configuracion.pdf).
 >
-> ⚠️ **These steps cover the simulation only.** The real robot is a more involved setup (Ubuntu 24.04 / ROS 2 Jazzy, the robot-side navigation snap, a pre-built map). For that, follow [`docs/manual_configuracion.pdf`](docs/manual_configuracion.pdf) rather than the steps below.
+> **These steps cover the simulation only.** The real robot is a more involved setup (Ubuntu 24.04 / ROS 2 Jazzy, the robot-side navigation snap, a pre-built map). For that, follow [`docs/manual_configuracion.pdf`](docs/manual_configuracion.pdf) rather than the steps below.
 
 ### Prerequisites
 - Ubuntu 22.04 with ROS 2 Humble installed
@@ -172,6 +171,7 @@ Full reference: [`docs/manual_comandos.pdf`](docs/manual_comandos.pdf)
 | Move | "avanza 2 metros" | "move forward 2 meters" |
 | Sequence | "avanza 1 metro y luego gira a la derecha" | "move 1m and then turn right" |
 | Navigate | "ve al baño" | "go to the bathroom" |
+| Patrol (multi-stop) | "go the bathroom, dining room and entrance" |
 | Stop | "para" / "detente" | "stop" |
 | Identity | "¿qué puedes hacer?" | "what can you do?" |
 
@@ -190,6 +190,7 @@ Both bypass the AI agent entirely and halt the robot with minimum latency.
 - **All motion through Nav2:** SpinTool uses `/spin`, MoveTool uses `/drive_on_heading` or `/backup`, NavigationTool uses `/navigate_to_pose`. The robot always operates with its position known on the map.
 - **Localisation as a hard prerequisite:** All motion tools check `localised_event` before executing. The event is set by a subscriber to `/initialpose`.
 - **LangChain one-tool-per-turn solved by SequenceTool:** Multi-step commands are packaged into a single tool call.
+- - **Spoken feedback (TTS):** the agent publishes a short phrase on `/laric_voice` for each status message; the HMI speaks it with gTTS so the user can operate by voice without watching the screen. The full text still appears in the HMI log. Audio plays on the PC (the ROSbot 3 has no speaker).
 - **Two-layer emergency stop:** UI button publishes zero-velocity directly to `/cmd_vel` (immediate), then signals the agent via `/emergency_stop` to cancel Nav2 goals.
 
 ---

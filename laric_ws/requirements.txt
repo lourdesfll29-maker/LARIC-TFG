@@ -16,6 +16,7 @@ langgraph
 langfuse<3.0.0
 
 # Audio Processing & Graphical User Interface
+edge-tts
 numpy<2.0
 SpeechRecognition
 sounddevice

@@ -5,8 +5,9 @@ Copyright (c) 2026 LARIC. All rights reserved.
 Implements the graphical user interface for the LARIC system, combining a
 ROS 2 node and a PyQt5 widget into a single object. Provides two input
 modalities (Push-to-Talk voice and keyboard text), a real-time colour-coded
-feedback log, a language selector, and a direct hardware-level emergency
-stop button.
+feedback log, spoken feedback (text-to-speech of the short phrases published
+on '/laric_voice'), a language selector, and a direct hardware-level
+emergency stop button.
 
 Architecture note:
     This module inherits from both 'rclpy.node.Node' and 'PyQt5.QWidget'.
@@ -30,12 +31,13 @@ Internationalisation:
 import io
 import os
 import queue
+import shutil
 import sys
 import tempfile
 import threading
 import subprocess
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 
 # Force the X11 (xcb) backend before any PyQt5 import: native Wayland ignores
 # stay-on-top hints and setGeometry, while XWayland behaves like X11.
@@ -121,6 +123,110 @@ def _suppress_stderr() -> Generator[None, None, None]:
 
 
 # ==============================================================================
+# VOICE OUTPUT
+# ==============================================================================
+
+class VoiceSpeaker:
+    """Text-to-speech playback for spoken system feedback."""
+
+    # MP3-capable command-line players, tried in order of preference.
+    _PLAYERS = (
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"],
+        ["mpg123", "-q"],
+        ["mpg321", "-q"],
+        ["cvlc", "--play-and-exit", "--intf", "dummy"],
+    )
+
+    # Neutral voice per language (run 'edge-tts --list-voices to browse more).
+    _VOICES = {
+        "en": "en-US-JennyNeural",
+        "es": "es-ES-ElviraNeural",
+    }
+
+    # Speech rate relative to the voice default.
+    _RATE = "+25%"
+
+    def __init__(self) -> None:
+        """Detects an available player."""
+        self._player = self._detect_player()
+        # Handle to the currently playing process, so stop() can kill it.
+        self._proc = None
+        self._proc_lock = threading.Lock()
+
+    @staticmethod
+    def _detect_player():
+        """Returns the first available player command, or None."""
+        for cmd in VoiceSpeaker._PLAYERS:
+            if shutil.which(cmd[0]):
+                return cmd
+        return None
+    
+    def synthesize(self, text: str, lang: str = "en") -> Optional[str]:
+        """Synthesises 'text' to an MP3 file and returns its path (or None)."""
+        if not text:
+            return None
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".mp3", delete=False
+            ) as handle:
+                tmp_path = handle.name
+            voice = self._VOICES.get(lang, self._VOICES["en"])
+            subprocess.run(
+                ["edge-tts", "--voice", voice, "--rate", self._RATE,
+                 "--text", text, "--write-media", tmp_path],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return tmp_path
+        except Exception:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+            return None
+
+    def play(self, mp3_path: str) -> None:
+        """Plays a synthesised MP3 (blocking) and deletes it afterwards."""
+        if not self._player or not mp3_path:
+            return
+        try:
+            # Non-blocking launch so stop() can terminate it; wait to keep
+            # phrases strictly sequential.
+            with self._proc_lock:
+                self._proc = subprocess.Popen(
+                    self._player + [mp3_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                proc = self._proc
+            proc.wait()
+        except Exception:
+            pass
+        finally:
+            with self._proc_lock:
+                self._proc = None
+            if os.path.exists(mp3_path):
+                try:
+                    os.unlink(mp3_path)
+                except Exception:
+                    pass
+        
+
+    def stop(self) -> None:
+        """Immediately silences any playback currentrly in progress."""
+        with self._proc_lock:
+            proc = self._proc
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+
+# ==============================================================================
 # HMI NODE
 # ==============================================================================
 
@@ -194,6 +300,10 @@ class InterfaceNode(Node, QWidget):
         self.sub_feedback = self.create_subscription(
             String, "/robot_feedback", self._feedback_callback, 10
         )
+        
+        self.sub_voice = self.create_subscription(
+            String, "/laric_voice", self._voice_callback, 10
+        )
 
         # 4. Initialise audio state
         self.audio_queue: queue.Queue = queue.Queue()
@@ -203,6 +313,21 @@ class InterfaceNode(Node, QWidget):
 
         # Default STT locale; switched to "es-ES" via the language dropdown.
         self.stt_language = "en-US"
+        
+        # Default TTS state kept in sync with the language dropdown.
+        self.tts_language = "en"
+        self._voice_muted = False
+        self._voice_speaker = VoiceSpeaker()
+        self._voice_queue: queue.Queue = queue.Queue()
+        self._play_queue: queue.Queue = queue.Queue()
+        self._synth_thread = threading.Thread(
+            target=self._synth_worker, daemon=True
+        )
+        self._play_thread = threading.Thread(
+            target=self._play_worker, daemon=True
+        )
+        self._synth_thread.start()
+        self._play_thread.start()
 
         # 5. Configure the single-shot PTT debounce timer (a re-press within
         #    PTT_DEBOUNCE_MS cancels it in keyPressEvent).
@@ -373,6 +498,31 @@ class InterfaceNode(Node, QWidget):
 
         layout.addLayout(input_layout)
 
+        # -- Mute / unmute button --------------------------------------------
+        # Same footprint as the language selector for visual consistency.
+        self.mute_button = QPushButton("🔊")
+        self.mute_button.setFixedSize(65, 45)
+        self.mute_button.setCursor(Qt.PointingHandCursor)
+        self.mute_button.setFocusPolicy(Qt.NoFocus)
+        self.mute_button.setCheckable(True)
+        self.mute_button.setStyleSheet("""
+            QPushButton {
+                background: #333333;
+                border: 1px solid #3e3e42;
+                border-radius: 8px;
+                color: #d4d4d4;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QPushButton:hover { border: 1px solid #4FC3F7; }
+            QPushButton:checked {
+                background: #4d2222;
+                border: 1px solid #D32F2F;
+            }
+        """)
+        self.mute_button.clicked.connect(self._toggle_mute)
+        input_layout.addWidget(self.mute_button)
+
         # -- Emergency Stop Button -------------------------------------------
         self.emergency_btn = QPushButton(_("EMERGENCY STOP (Ctrl+E)"))
         self.emergency_btn.setCursor(Qt.PointingHandCursor)
@@ -403,6 +553,22 @@ class InterfaceNode(Node, QWidget):
 
 
     # --------------------------------------------------------------------------
+    # MUTE / UNMUTE SELECTION
+    # --------------------------------------------------------------------------
+    def _toggle_mute(self) -> None:
+        """Toggles spoken feedback on/off and reflects state on the button."""
+        self._voice_muted = self.mute_button.isChecked()
+        if self._voice_muted:
+            self.mute_button.setText("🔇")
+            self._interrupt_voice()   # cut off anything mid-sentence
+            self.add_log(_("[SYSTEM] Voice muted."), "#4FC3F7")
+        else:
+            self.mute_button.setText("🔊")
+            self.add_log(_("[SYSTEM] Voice unmuted."), "#4FC3F7")
+        self.setFocus()   # keep spacebar PTT working
+
+
+    # --------------------------------------------------------------------------
     # LANGUAGE SELECTION
     # --------------------------------------------------------------------------
     def _update_language(self, index: int) -> None:
@@ -422,6 +588,9 @@ class InterfaceNode(Node, QWidget):
             lang_code = "es"
         else:
             return
+        
+        # Keep the TTS language in sync with the dropdown (gTTS code).
+        self.tts_language = lang_code
 
         # 2. Activate the new catalog locally. All subsequent '_("...")' calls
         #    in this process resolve through the freshly loaded translator.
@@ -455,6 +624,13 @@ class InterfaceNode(Node, QWidget):
         self.add_log(
             (_("[SYSTEM] Shutting down entire LARIC system...")), "#FF4444"
         )
+        
+        # Silence any speech immediately, then stop the voice worker.
+        try:
+            self._voice_speaker.stop()
+            self._voice_queue.put(None)
+        except Exception:
+            pass
         
         try:
             # Verify the script exists at the dynamically resolved path
@@ -500,6 +676,71 @@ class InterfaceNode(Node, QWidget):
         """
         self.add_log(f"{msg.data}", "#4FC3F7")
 
+
+    # --------------------------------------------------------------------------
+    # VOICE OUTPUT
+    # --------------------------------------------------------------------------
+    def _voice_callback(self, msg: String) -> None:
+        """
+        ROS 2 callback for /laric_voice: queues a phrase for text-to-speech.
+
+        Args:
+            msg: Incoming 'std_msgs/String' with the short phrase to speak.
+        """
+        phrase = msg.data.strip()
+        if phrase and not self._voice_muted:
+            # Snapshot the current language so the phrase is spoken in whatever
+            # language was active when it was issued.
+            self._voice_queue.put((phrase, self.tts_language))
+
+    def _synth_worker(self) -> None:
+        """Synthesises queued phrases ahead of playback, preserving order."""
+        while True:
+            item = self._voice_queue.get()
+            if item is None:
+                self._play_queue.put(None)   # propagate shutdown
+                break
+            text, lang = item
+            mp3_path = self._voice_speaker.synthesize(text, lang)
+            if mp3_path:
+                self._play_queue.put(mp3_path)
+
+    def _play_worker(self) -> None:
+        """Plays synthesised phrases one at a time, in order."""
+        while True:
+            mp3_path = self._play_queue.get()
+            if mp3_path is None:
+                break
+            self._voice_speaker.play(mp3_path)
+
+    def _interrupt_voice(self) -> None:
+        """
+        Discards queued/in-flight speech and silences playback in progress.
+        """
+        # Drop phrases still waiting to be synthesised.
+        self._drain_queue(self._voice_queue)
+        # Drop already-synthesised phrases waiting to play.
+        for mp3_path in self._drain_queue(self._play_queue):
+            if mp3_path and os.path.exists(mp3_path):
+                try:
+                    os.unlink(mp3_path)
+                except Exception:
+                    pass
+        # Silence whatever is playing right now.
+        self._voice_speaker.stop()
+
+    @staticmethod
+    def _drain_queue(q: queue.Queue) -> list:
+        """Removes and returns all items currently in 'q'."""
+        items = []
+        try:
+            while True:
+                items.append(q.get_nowait())
+        except queue.Empty:
+            pass
+        return items
+
+
     # --------------------------------------------------------------------------
     # TEXT INPUT
     # --------------------------------------------------------------------------
@@ -511,6 +752,9 @@ class InterfaceNode(Node, QWidget):
         text = self.text_input.text().strip()
         if not text:
             return
+        
+        # 0. Silence any current/queued speech so the new command takes over.
+        self._interrupt_voice()
 
         # 1. Log the command locally before publishing
         self.add_log(_("[USER - TEXT]: {}").format(text), "#8BC34A")
@@ -549,6 +793,9 @@ class InterfaceNode(Node, QWidget):
 
         # Step 3: Inform the operator
         self.add_log(_("[EMERGENCY STOP] Robot halted by user."), "#FF4444")
+
+        # Step 4: Silence any current/queued speech.
+        self._interrupt_voice()
         
         # Return focus to main window so PTT continues to work
         self.setFocus()
@@ -773,7 +1020,10 @@ class InterfaceNode(Node, QWidget):
 
             self.add_log(_("[USER - VOICE]: {}").format(text), "#8BC34A")
 
-            # 6. Publish the transcription to the agent's input topic
+            # 6. Silence any current/queued speech.
+            self._interrupt_voice()
+
+            # 7. Publish the transcription to the agent's input topic
             msg = String()
             msg.data = text.lower()
             self.pub_human.publish(msg)
