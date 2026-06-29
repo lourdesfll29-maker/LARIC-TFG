@@ -30,7 +30,7 @@ LARIC-TFG/
 ├── docs/                            # Project documentation
 |   ├── images/architecture.svg
 │   ├── documentacion.pdf            # Full TFG report
-│   ├── evolucion_proyecto.pdf            # Full TFG report
+│   ├── evolucion_proyecto.pdf       # Architecture evolution
 │   ├── glosario.pdf                 # Technical glossary
 │   ├── manual_comandos.pdf          # Voice/text command reference
 │   ├── manual_configuracion.pdf     # Full installation guide (sim + real)
