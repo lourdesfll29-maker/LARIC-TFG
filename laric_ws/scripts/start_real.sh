@@ -16,6 +16,7 @@ ROBOT_IP="192.168.1.46"
 # ROS 2 network: must match the robot (domain 0, DDS discovery on the subnet).
 export ROS_DOMAIN_ID=0
 export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+export ROS_STATIC_PEERS="192.168.1.46;192.168.1.102"   # unicast DDS discovery (ROSbot;client)
 
 mkdir -p "$LOG_DIR"
 
