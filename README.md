@@ -29,6 +29,7 @@ LARIC-TFG/
 ├── README.md
 ├── docs/                            # Project documentation
 |   ├── images/architecture.svg
+│   ├── bibliografia.pdf             # Bibliography & references
 │   ├── documentacion.pdf            # Full TFG report
 │   ├── evolucion_proyecto.pdf       # Architecture evolution
 │   ├── glosario.pdf                 # Technical glossary
