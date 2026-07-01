@@ -315,7 +315,7 @@ msgid ""
 "action before issuing a new command."
 msgstr ""
 
-msgid "Turning {angle} degrees."
+msgid "Turning {angle:.0f} degrees."
 msgstr ""
 
 msgid "Rotation cancelled."

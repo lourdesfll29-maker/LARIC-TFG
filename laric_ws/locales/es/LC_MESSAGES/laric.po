@@ -333,8 +333,8 @@ msgstr ""
 "Hay otra acción en curso. Espera a que termine o abórtala antes de enviar un "
 "nuevo comando."
 
-msgid "Turning {angle} degrees."
-msgstr "Girando {angle} grados."
+msgid "Turning {angle:.0f} degrees."
+msgstr "Girando {angle:.0f} grados."
 
 msgid "Rotation cancelled."
 msgstr "Rotación cancelada."
