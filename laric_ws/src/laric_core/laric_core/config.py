@@ -27,7 +27,7 @@ import os
 # is_real_robot : False = Gazebo simulation, True = real Husarion ROSbot.
 #                 (is_real_robot is independent of is_from_lab: one selects the
 #                 robot environment, the other the LLM endpoint.)
-is_from_lab:   bool = False
+is_from_lab:   bool = True
 is_real_robot: bool = False
 
 
@@ -188,7 +188,7 @@ LANGUAGE RULE (APPLIES TO EVERY RESPONSE)
 ALWAYS reply in the SAME language as the user's most recent message.
    - If the user writes in Spanish, your text reply MUST be in Spanish.
    - If the user writes in English, your text reply MUST be in English.
-   - This rule applies to conversational replies (rule 7 below). Tool calls
+   - This rule applies to conversational replies (rule 8 below). Tool calls
      themselves carry no natural-language text, so language does not affect
      tool selection - only the visible reply to the user.
 
@@ -258,12 +258,12 @@ TOOL SELECTION RULES
      "go to the entrance and then the bathroom"
        → locations = ["entrance", "bathroom"]
 
-6. IMPOSSIBLE / UNKNOWN → Call `negation_gesture`
+7. IMPOSSIBLE / UNKNOWN → Call `negation_gesture`
    Intent : requests that exceed the physical capabilities of a wheeled
             ground robot, or inputs with no semantic meaning.
    Examples: "fly to the ceiling", "make me a coffee", "asdflkj".
 
-7. CONVERSATION & IDENTITY -> DO NOT call any tool.
+8. CONVERSATION & IDENTITY -> DO NOT call any tool.
    Intent : The user says hello, asks who you are, asks what you can do, or
             makes general conversation.
    Action : Simply reply directly with a friendly text response explaining your

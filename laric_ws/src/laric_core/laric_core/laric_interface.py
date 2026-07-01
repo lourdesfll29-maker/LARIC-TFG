@@ -247,6 +247,8 @@ class InterfaceNode(Node, QWidget):
             agent process can update its gettext catalog in sync with the HMI.
         sub_feedback: ROS 2 subscription to 'std_msgs/String' on
             '/robot_feedback'.
+        sub_voice: ROS 2 subscription to 'std_msgs/String' on '/laric_voice';
+            queues spoken phrases for text-to-speech playback.
         audio_queue (queue.Queue): Thread-safe buffer that accumulates raw
             audio chunks from the 'sounddevice' input stream callback.
         is_recording (bool): 'True' while a PTT recording session is active.
@@ -254,6 +256,14 @@ class InterfaceNode(Node, QWidget):
         stream: Active 'sounddevice.InputStream', or 'None' when idle.
         stt_language (str): Locale code passed to the Google STT API
             (e.g. 'en-US', 'es-ES'); kept in sync with the dropdown.
+        tts_language (str): Locale code passed to the TTS engine (e.g. 'en',
+            'es'); kept in sync with the dropdown.
+        _voice_muted (bool): 'True' when the mute button has silenced spoken
+            feedback; set by '_toggle_mute'.
+        _voice_speaker (VoiceSpeaker): Handles text-to-speech synthesis and
+            playback (edge-tts synth stage followed by a playback stage).
+        _voice_queue / _play_queue (queue.Queue): Thread-safe buffers feeding
+            the synth and playback worker threads.
         stop_timer (QTimer): Single-shot debounce timer for the PTT key release.
         ros_timer (QTimer): Periodic timer that drives the ROS 2 spin loop.
         label (QLabel): Status indicator widget showing the current PTT state.
@@ -261,6 +271,8 @@ class InterfaceNode(Node, QWidget):
         text_input (QLineEdit): Manual text command input field.
         language_selector (QComboBox): EN/ES language selector dropdown.
         emergency_btn (QPushButton): Hardware-level emergency stop button.
+        mute_button (QPushButton): 🔊/🔇 toggle that mutes/unmutes spoken
+            feedback (see '_toggle_mute').
     """
 
     # Class-level signal declaration required by the Qt meta-object system.
@@ -278,7 +290,7 @@ class InterfaceNode(Node, QWidget):
         self.log_signal.connect(self.update_log_slot)
 
         # 3. Create ROS 2 publishers/subscribers (/from_human, /cmd_vel,
-        #    /emergency_stop, /language_changed, /robot_feedback).
+        #    /emergency_stop, /language_changed, /robot_feedback, /laric_voice).
         self.pub_human = self.create_publisher(String, "/from_human", 10)
 
         # Direct /cmd_vel and /emergency_stop publishers for hardware halt

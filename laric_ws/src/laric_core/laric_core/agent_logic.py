@@ -1021,7 +1021,7 @@ class SequenceTool(BaseTool):
                         self.connector,
                         _("[LARIC]: Sequence interrupted at step {i}.")
                         .format(i=index + 1),
-                        voice=_("Sequence interruptedat step {i}.")
+                        voice=_("Sequence interrupted at step {i}.")
                         .format(i=index + 1)
                     )
                     return (
@@ -1627,7 +1627,7 @@ class GestureTool(BaseTool):
                 _("[LARIC]: (Negation gesture) Request not executable. "
                   "Reason: {reason}")
                 .format(reason=reason),
-                voice=_("I cannot fulfill the request.") 
+                voice=_("I cannot fulfill the request.")
             )
 
             # 2. Oscillation pattern: alternating left/right angular velocity
@@ -1984,7 +1984,7 @@ def main() -> None:
                 _("[SYSTEM]: ERROR - Groq selected (is_from_lab=False) but "
                   "GROQ_API_KEY is not set. Export it, or switch to the lab "
                   "Ollama (is_from_lab=True)."),
-                voice=_("Missing API key.") 
+                voice=_("Missing API key.")
             )
         llm = ChatGroq(
             temperature=0, 
