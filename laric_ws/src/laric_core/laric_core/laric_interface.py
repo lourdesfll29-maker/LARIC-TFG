@@ -601,7 +601,7 @@ class InterfaceNode(Node, QWidget):
         else:
             return
         
-        # Keep the TTS language in sync with the dropdown (gTTS code).
+        # Keep the TTS language in sync with the dropdown.
         self.tts_language = lang_code
 
         # 2. Activate the new catalog locally. All subsequent '_("...")' calls
