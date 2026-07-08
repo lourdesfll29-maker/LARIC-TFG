@@ -31,6 +31,7 @@ LARIC-TFG/
 |   ├── images/architecture.svg
 │   ├── bibliografia.pdf             # Bibliography & references
 │   ├── documentacion.pdf            # Full TFG report
+│   ├── estado_arte.pdf              # State of the art & existing solutions
 │   ├── evolucion_proyecto.pdf       # Architecture evolution
 │   ├── glosario.pdf                 # Technical glossary
 │   ├── manual_comandos.pdf          # Voice/text command reference
